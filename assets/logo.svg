@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <!-- ctxlineage logo C "Merge": two strands merge into the context node -->
+  <g fill="none" stroke="#252B33" stroke-width="15" stroke-linecap="round">
+    <path d="M36 76 C 104 76, 100 128, 152 128"/>
+    <path d="M36 180 C 104 180, 100 128, 152 128"/>
+    <path d="M152 128 H 178"/>
+  </g>
+  <circle cx="36" cy="76" r="12" fill="#252B33"/>
+  <circle cx="36" cy="180" r="12" fill="#252B33"/>
+  <circle cx="204" cy="128" r="22" fill="#1FBFAE"/>
+</svg>

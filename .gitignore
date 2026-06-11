@@ -1,0 +1,31 @@
+# Local working drafts (Japanese planning doc — canonical English version: docs/PLAN.md)
+base_plan.md
+
+# ctxlineage's own capture output
+.ctxlineage/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+dist/
+build/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Node / frontend
+node_modules/
+frontend/dist/
+
+# Tooling / editors
+.serena/
+.claude/
+.idea/
+.vscode/
+.DS_Store

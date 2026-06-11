@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 880 200" width="880" height="200">
+  <!-- ctxlineage wordmark (light backgrounds) -->
+  <g transform="translate(-8,-28) scale(1)">
+    <g fill="none" stroke="#252B33" stroke-width="13" stroke-linecap="round">
+      <path d="M40 88 C 96 88, 92 128, 134 128"/>
+      <path d="M40 168 C 96 168, 92 128, 134 128"/>
+      <path d="M134 128 H 156"/>
+    </g>
+    <circle cx="40" cy="88" r="10" fill="#252B33"/>
+    <circle cx="40" cy="168" r="10" fill="#252B33"/>
+    <circle cx="178" cy="128" r="18" fill="#1FBFAE"/>
+  </g>
+  <text x="216" y="125" font-family="ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace" font-size="72" font-weight="600" fill="#252B33">ctx<tspan fill="#1FBFAE">lineage</tspan></text>
+</svg>
