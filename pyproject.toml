@@ -6,7 +6,11 @@ readme = "README.md"
 requires-python = ">=3.10"
 license = "Apache-2.0"
 authors = [{ name = "K.Masuda", email = "me@masukai.dev" }]
-dependencies = ["wrapt>=1.16"]
+dependencies = ["wrapt>=1.16", "click>=8.1", "tiktoken>=0.8"]
+
+[project.scripts]
+ctxlineage = "ctxlineage._cli:main"
+ctxl = "ctxlineage._cli:main"
 
 [dependency-groups]
 dev = [
