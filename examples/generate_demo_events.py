@@ -201,6 +201,77 @@ def generate(directory) -> None:
         }
     )
 
+    # Session 3: agent tool-call loop (search twice, then answer) — exercises
+    # role=tool segments and the repeated input→output chain the report shows.
+    demo3 = _Demo(writer, "demo-session-agent")
+    agent_system = (
+        "You are repo-bot. Use the search_docs tool to gather evidence before answering. "
+        "Loop until you have enough context."
+    )
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "search_docs",
+                "description": "Search the project documentation.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"query": {"type": "string"}},
+                    "required": ["query"],
+                },
+            },
+        }
+    ]
+    question = {"role": "user", "content": "Does ctxlineage need a database server?"}
+    call1_out = 'Calling search_docs("database server requirement")'
+    demo3.chat(
+        messages=[{"role": "system", "content": agent_system}, question],
+        answer=call1_out,
+        prompt_tokens=130,
+        completion_tokens=14,
+        tools=tools,
+    )
+    tool_result_1 = {
+        "role": "tool",
+        "name": "search_docs",
+        "tool_call_id": "tc-1",
+        "content": CHUNKS[0] + "\n" + CHUNKS[2],
+    }
+    call2_out = 'Calling search_docs("report generation server")'
+    demo3.chat(
+        messages=[
+            {"role": "system", "content": agent_system},
+            question,
+            {"role": "assistant", "content": call1_out},
+            tool_result_1,
+        ],
+        answer=call2_out,
+        prompt_tokens=310,
+        completion_tokens=13,
+        tools=tools,
+    )
+    tool_result_2 = {
+        "role": "tool",
+        "name": "search_docs",
+        "tool_call_id": "tc-2",
+        "content": CHUNKS[1],
+    }
+    demo3.chat(
+        messages=[
+            {"role": "system", "content": agent_system},
+            question,
+            {"role": "assistant", "content": call1_out},
+            tool_result_1,
+            {"role": "assistant", "content": call2_out},
+            tool_result_2,
+        ],
+        answer="No. Events are appended to a local JSONL file and the report is a single "
+        "self-contained HTML - no database or server is required [chunk-1][chunk-2].",
+        prompt_tokens=455,
+        completion_tokens=38,
+        tools=tools,
+    )
+
     print(f"wrote {writer.path}")
 
 

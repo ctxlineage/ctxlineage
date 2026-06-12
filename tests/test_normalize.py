@@ -170,6 +170,29 @@ def test_responses_api_segments():
     assert call["output"]["content"] == "A context lineage tool."
 
 
+def test_tool_message_name_propagated():
+    payload = _chat_payload()
+    payload["request"]["messages"].append(
+        {"role": "tool", "name": "search_docs", "tool_call_id": "tc1", "content": "result text"}
+    )
+    data = normalize.build_report_data([_event(payload)])
+    tool_seg = data["sessions"][0]["calls"][0]["segments"][-1]
+    assert tool_seg["kind"] == "tool"
+    assert tool_seg["name"] == "search_docs"
+
+
+def test_tool_definitions_become_segment():
+    payload = _chat_payload()
+    payload["request"]["tools"] = [
+        {"type": "function", "function": {"name": "search_docs", "parameters": {}}}
+    ]
+    data = normalize.build_report_data([_event(payload)])
+    segments = data["sessions"][0]["calls"][0]["segments"]
+    assert segments[-1]["kind"] == "tool_defs"
+    assert segments[-1]["tokens_est"] >= 1
+    assert "search_docs" in segments[-1]["content"]
+
+
 def test_unknown_model_context_window_is_null():
     payload = _chat_payload()
     payload["request"]["model"] = "mystery-model"
@@ -193,7 +216,7 @@ def test_end_to_end_with_demo_data(tmp_path):
     events, skipped = normalize.load_events(tmp_path / "events.jsonl")
     data = normalize.build_report_data(events)
     assert skipped == 0
-    assert data["stats"]["sessions"] == 2
+    assert data["stats"]["sessions"] == 3
     assert data["stats"]["errors"] == 1
     rag = next(s for s in data["sessions"] if s["id"] == "demo-session-rag")
     assert len(rag["calls"]) == 6
