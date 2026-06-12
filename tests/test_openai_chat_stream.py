@@ -7,9 +7,7 @@ SSE_HEADERS = {"content-type": "text/event-stream"}
 
 
 def _mock_stream(body):
-    respx.post(CHAT_URL).mock(
-        return_value=httpx.Response(200, headers=SSE_HEADERS, content=body)
-    )
+    respx.post(CHAT_URL).mock(return_value=httpx.Response(200, headers=SSE_HEADERS, content=body))
 
 
 @respx.mock

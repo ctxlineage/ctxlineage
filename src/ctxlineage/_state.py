@@ -38,7 +38,9 @@ def session_id() -> str | None:
     return _session_id
 
 
-def emit(event_type: str, payload: dict, *, call_id: str | None = None, span_id: str | None = None) -> bool:
+def emit(
+    event_type: str, payload: dict, *, call_id: str | None = None, span_id: str | None = None
+) -> bool:
     """Record one event. Returns False (never raises) when unconfigured or on failure."""
     global _warned
     if _writer is None or _session_id is None:

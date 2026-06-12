@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import threading
 import uuid
 from datetime import datetime, timezone
@@ -45,7 +46,7 @@ class EventWriter:
     multiple processes can append to the same file (POSIX append mode).
     """
 
-    def __init__(self, directory: str | Path):
+    def __init__(self, directory: str | os.PathLike):
         self._dir = Path(directory)
         self.path = self._dir / "events.jsonl"
         self._lock = threading.Lock()

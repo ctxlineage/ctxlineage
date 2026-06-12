@@ -13,9 +13,7 @@ MESSAGES = [{"role": "user", "content": "Say hello"}]
 
 
 @respx.mock
-def test_write_failure_does_not_break_call(
-    capture, openai_client, chat_response_json, monkeypatch
-):
+def test_write_failure_does_not_break_call(capture, openai_client, chat_response_json, monkeypatch):
     respx.post(CHAT_URL).mock(return_value=httpx.Response(200, json=chat_response_json))
 
     def boom(self, event):

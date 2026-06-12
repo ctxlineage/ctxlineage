@@ -74,7 +74,9 @@ def test_api_error_recorded_and_reraised(capture, openai_client):
 
 
 @respx.mock
-def test_without_init_call_succeeds_and_nothing_written(tmp_path, openai_client, chat_response_json):
+def test_without_init_call_succeeds_and_nothing_written(
+    tmp_path, openai_client, chat_response_json
+):
     import ctxlineage._instrument as instrument
 
     instrument.install()  # patched but state unconfigured

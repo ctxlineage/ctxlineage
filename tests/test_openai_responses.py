@@ -2,7 +2,6 @@ import json
 
 import httpx
 import openai
-import pytest
 import respx
 
 RESPONSES_URL = "https://api.openai.com/v1/responses"
@@ -49,11 +48,24 @@ def _sse(*payloads) -> bytes:
     return body + b"data: [DONE]\n\n"
 
 
+def _text_delta(delta, seq):
+    return {
+        "type": "response.output_text.delta",
+        "item_id": "msg_1",
+        "output_index": 0,
+        "content_index": 0,
+        "delta": delta,
+        "logprobs": [],
+        "sequence_number": seq,
+    }
+
+
 def _stream_body():
+    in_progress = {**RESPONSE_JSON, "status": "in_progress", "usage": None}
     return _sse(
-        {"type": "response.created", "response": {**RESPONSE_JSON, "status": "in_progress", "usage": None}, "sequence_number": 0},
-        {"type": "response.output_text.delta", "item_id": "msg_1", "output_index": 0, "content_index": 0, "delta": "Hello", "logprobs": [], "sequence_number": 1},
-        {"type": "response.output_text.delta", "item_id": "msg_1", "output_index": 0, "content_index": 0, "delta": " world", "logprobs": [], "sequence_number": 2},
+        {"type": "response.created", "response": in_progress, "sequence_number": 0},
+        _text_delta("Hello", 1),
+        _text_delta(" world", 2),
         {"type": "response.completed", "response": RESPONSE_JSON, "sequence_number": 3},
     )
 
