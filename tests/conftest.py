@@ -18,6 +18,15 @@ def validate_event():
     return _validate
 
 
+@pytest.fixture(autouse=True)
+def _reset_ctxlineage_state():
+    from ctxlineage import _state
+
+    _state._reset()
+    yield
+    _state._reset()
+
+
 @pytest.fixture
 def valid_llm_call_event():
     return {
