@@ -1,0 +1,117 @@
+- generic [active] [ref=e1]:
+  - banner [ref=e2]:
+    - img [ref=e3]
+    - generic [ref=e10]: ctxlineage
+    - generic [ref=e11]: 11 calls · 3 sessions · 1 errors
+    - button "☾ dark" [ref=e12] [cursor=pointer]
+  - generic [ref=e13]:
+    - navigation [ref=e14]:
+      - heading "demo-session-rag" [level=3] [ref=e15]
+      - generic [ref=e16] [cursor=pointer]:
+        - generic [ref=e17]: "1"
+        - generic [ref=e18]:
+          - text: gpt-4o-mini
+          - generic [ref=e19]: 09:01:00 · 102 tok
+      - generic [ref=e20] [cursor=pointer]:
+        - generic [ref=e21]: "2"
+        - generic [ref=e22]:
+          - text: gpt-4o-mini
+          - generic [ref=e23]: 09:02:00 · 479 tok
+      - generic [ref=e24] [cursor=pointer]:
+        - generic [ref=e25]: "3"
+        - generic [ref=e26]:
+          - text: gpt-4o-mini
+          - generic [ref=e27]: 09:03:00 · 138 tok
+      - generic [ref=e28] [cursor=pointer]:
+        - generic [ref=e29]: "4"
+        - generic [ref=e30]:
+          - text: gpt-4o-mini
+          - generic [ref=e31]: 09:04:00 · 626 tok
+      - generic [ref=e32] [cursor=pointer]:
+        - generic [ref=e33]: "5"
+        - generic [ref=e34]:
+          - text: gpt-4o-mini
+          - generic [ref=e35]: 09:05:00 · 174 tok
+      - generic [ref=e36] [cursor=pointer]:
+        - generic [ref=e37]: "6"
+        - generic [ref=e38]:
+          - text: gpt-4o-mini
+          - generic [ref=e39]: 09:06:00 · 791 tok
+      - heading "demo-session-stream" [level=3] [ref=e40]
+      - generic [ref=e41] [cursor=pointer]:
+        - generic [ref=e42]: "7"
+        - generic [ref=e43]:
+          - text: gpt-4o-mini
+          - generic [ref=e44]: 09:01:00 · 78 tok
+        - generic [ref=e45]: stream
+      - generic [ref=e46] [cursor=pointer]:
+        - generic [ref=e47]: "8"
+        - generic [ref=e48]:
+          - text: gpt-4o-mini
+          - generic [ref=e49]: 09:02:00 · –
+        - generic [ref=e50]: error
+      - heading "demo-session-agent" [level=3] [ref=e51]
+      - generic [ref=e52] [cursor=pointer]:
+        - generic [ref=e53]: "9"
+        - generic [ref=e54]:
+          - text: gpt-4o-mini
+          - generic [ref=e55]: 09:01:00 · 144 tok
+      - generic [ref=e56] [cursor=pointer]:
+        - generic [ref=e57]: "10"
+        - generic [ref=e58]:
+          - text: gpt-4o-mini
+          - generic [ref=e59]: 09:02:00 · 323 tok
+      - generic [ref=e60] [cursor=pointer]:
+        - generic [ref=e61]: "11"
+        - generic [ref=e62]:
+          - text: gpt-4o-mini
+          - generic [ref=e63]: 09:03:00 · 493 tok
+    - main [ref=e64]:
+      - generic [ref=e65]:
+        - heading "call 1" [level=2] [ref=e66]
+        - generic [ref=e67]: call-demo-session-rag-1 · 2026-06-12T09:01:00+00:00
+      - generic [ref=e69]:
+        - generic [ref=e70]: context window — input 90 tok
+        - generic [ref=e71]: 0.07% of 128,000
+      - generic [ref=e76]:
+        - generic [ref=e77]:
+          - heading "input — context" [level=4] [ref=e78]
+          - generic [ref=e79] [cursor=pointer]:
+            - generic [ref=e80]:
+              - generic [ref=e81]: user input
+              - generic [ref=e82]: 9 tok · 38%
+            - generic [ref=e83]: How do I start recording LLM calls?
+          - generic [ref=e84]: user input may contain app-injected context — the span/tag API (M3) splits and attributes it
+        - generic [ref=e85]: →
+        - generic [ref=e86]:
+          - heading "fn — model + instructions" [level=4] [ref=e87]
+          - generic [ref=e88]:
+            - generic [ref=e89]: gpt-4o-mini
+            - generic [ref=e90]:
+              - generic [ref=e91]: api
+              - generic [ref=e92]: chat.completions
+            - generic [ref=e93]:
+              - generic [ref=e94]: duration
+              - generic [ref=e95]: 420 ms
+            - generic [ref=e96]:
+              - generic [ref=e97]: mode
+              - generic [ref=e98]: sync
+            - generic [ref=e99]:
+              - generic [ref=e100]: usage
+              - generic [ref=e101]: 102 tok
+            - generic [ref=e102] [cursor=pointer]:
+              - generic [ref=e103]:
+                - generic [ref=e104]: instructions
+                - generic [ref=e105]: 15 tok · 63% of input
+              - generic [ref=e106]: Rewrite the user question into a standalone search query. Return only the query.
+        - generic [ref=e107]: →
+        - generic [ref=e108]:
+          - heading "output" [level=4] [ref=e109]
+          - generic [ref=e110]:
+            - generic [ref=e111]:
+              - generic [ref=e112]: llm output
+              - generic [ref=e113]: 12 tok · stop
+            - generic [ref=e114]: "search: how do i start recording llm calls"
+      - generic [ref=e115]:
+        - text: called from
+        - code [ref=e116]: rag_app.py:answer_query:57 ← rag_app.py:main:21
