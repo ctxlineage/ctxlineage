@@ -19,6 +19,14 @@ def validate_event():
 
 
 @pytest.fixture(autouse=True)
+def _offline_token_estimation(monkeypatch):
+    """Keep the suite hermetic: never let tiktoken hit the network in tests."""
+    from ctxlineage._report import tokens
+
+    monkeypatch.setattr(tokens, "_encoding_for", lambda model: None)
+
+
+@pytest.fixture(autouse=True)
 def _reset_ctxlineage_state():
     from ctxlineage import _state
 
