@@ -37,6 +37,17 @@ def install() -> bool:
         "AsyncCompletions.create",
         _make_async_wrapper("chat.completions"),
     )
+    try:  # Responses API: absent in older SDKs
+        wrapt.wrap_function_wrapper(
+            "openai.resources.responses", "Responses.create", _make_sync_wrapper("responses")
+        )
+        wrapt.wrap_function_wrapper(
+            "openai.resources.responses",
+            "AsyncResponses.create",
+            _make_async_wrapper("responses"),
+        )
+    except (ImportError, AttributeError):
+        pass
     _PATCHED = True
     return True
 
@@ -132,7 +143,8 @@ class _StreamRecorderMixin:
             return
         self._self_done = True
         payload = self._self_payload
-        payload["response"] = _assemble_chat(self._self_chunks)
+        assemble = _assemble_responses if self._self_api == "responses" else _assemble_chat
+        payload["response"] = assemble(self._self_chunks)
         payload["usage"] = payload["response"].get("usage")
         _state.emit("llm_call", payload, call_id=_events.new_id())
 
@@ -195,6 +207,33 @@ class _AsyncStreamProxy(wrapt.ObjectProxy, _StreamRecorderMixin):
             return await self.__wrapped__.close()
         finally:
             self._self_finish()
+
+
+def _assemble_responses(chunks: list) -> dict:
+    """Reduce Responses API stream events into one response-like summary.
+
+    The final `response.completed` event already carries the full response
+    (incl. usage); the concatenated output_text covers aborted streams.
+    """
+    output_text = ""
+    final = None
+    for chunk in chunks:
+        if not isinstance(chunk, dict):
+            continue
+        kind = chunk.get("type", "")
+        if kind == "response.output_text.delta" and chunk.get("delta"):
+            output_text += chunk["delta"]
+        elif kind == "response.completed" and isinstance(chunk.get("response"), dict):
+            final = chunk["response"]
+    return {
+        "object": "response.assembled",
+        "id": (final or {}).get("id"),
+        "model": (final or {}).get("model"),
+        "output_text": output_text,
+        "final": final,
+        "usage": (final or {}).get("usage"),
+        "chunk_count": len(chunks),
+    }
 
 
 def _assemble_chat(chunks: list) -> dict:
