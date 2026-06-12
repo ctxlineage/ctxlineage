@@ -48,6 +48,37 @@ def chat_response_json():
     return dict(_CHAT_COMPLETION_RESPONSE)
 
 
+def _sse(*payloads) -> bytes:
+    body = b""
+    for p in payloads:
+        body += b"data: " + json.dumps(p).encode() + b"\n\n"
+    return body + b"data: [DONE]\n\n"
+
+
+def _chat_chunk(delta=None, finish_reason=None, usage=None):
+    return {
+        "id": "chatcmpl-test1",
+        "object": "chat.completion.chunk",
+        "created": 1765500000,
+        "model": "gpt-4o-mini",
+        "choices": []
+        if delta is None and finish_reason is None
+        else [{"index": 0, "delta": delta or {}, "finish_reason": finish_reason}],
+        "usage": usage,
+    }
+
+
+@pytest.fixture
+def chat_stream_body():
+    """SSE stream: 'Hello' + ' world', then finish, then a usage-only chunk."""
+    return _sse(
+        _chat_chunk(delta={"role": "assistant", "content": "Hello"}),
+        _chat_chunk(delta={"content": " world"}),
+        _chat_chunk(finish_reason="stop"),
+        _chat_chunk(usage={"prompt_tokens": 9, "completion_tokens": 2, "total_tokens": 11}),
+    )
+
+
 @pytest.fixture
 def capture(tmp_path):
     """init() into tmp_path and return a reader for the events written there."""
