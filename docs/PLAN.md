@@ -96,7 +96,7 @@ The HTML has two views:
 ## 5. Non-Goals (explicitly not doing)
 
 - SaaS / hosting / accounts
-- Evals, prompt version management, cost-optimization suggestions
+- Evals (LLM-as-judge quality scoring, eval datasets, benchmarks / leaderboards), prompt version management, cost-optimization suggestions. *(Distinction: **deterministic contract / regression tests over the recorded artifact** — "data tests, not model evals" — are a separate **post-v0.1.0** direction, see §13. They are explicitly **not** part of v1 and do not soften this guardrail.)*
 - DB server (no persistent DB incl. SQLite in v1 — JSONL is enough)
 - Non-Python SDKs (but keep the JSONL schema language-agnostic to enable TS etc. later)
 - LLM proxying (no request rewriting / forwarding)
@@ -177,3 +177,29 @@ Each milestone must be independently demoable. At the end of M2, the experience 
 - **Segment matching inaccuracy:** non-exact matches (template variable expansion etc.) → in v1, degrade gracefully to "untagged" without breaking, and honestly display the match rate in the report.
 - **HTML bloat with huge contexts:** hundreds of KB of prompts × many calls → collapse + lazy-expand bodies; above a threshold, optionally split bodies into a separate JSON file.
 - **Name squatting:** before release: (i) create the GitHub org `ctxlineage`, (ii) publish a `ctxlineage` 0.0.1 placeholder to PyPI, (iii) reserve the `ctxlineage` npm package name (for a future TS SDK). Availability was checked on 2026-06-11 — re-verify immediately before executing.
+
+## 13. Future Direction — Context Contract Testing (post-v0.1.0, NOT v1)
+
+> **Not committed scope.** Recorded 2026-06-13 as a positioning direction. Gated behind v0.1.0
+> (M1–M4) shipping first; depends on the M3 lineage graph existing. Full write-up:
+> [docs/vision/context-contract-testing.md](vision/context-contract-testing.md).
+
+**Thesis:** the captured artifact (`events.jsonl` + segment decomposition + lineage graph) is
+also a substrate for **deterministic, CI-gate-able tests on LLM context** — an evolution of the
+visualization mission, not a pivot. Positioning: the **"Elementary" of the LLM-context stack** —
+a lightweight OSS layer that rides on the artifact and adds tests-in-CI, below the SaaS
+observability players. It operationalizes established theory (the oracle problem; metamorphic
+testing, Chen 1998; behavioral/CheckList testing, Ribeiro 2020) rather than inventing it: assert
+a **relation** over (input, output), not the output value — most useful relations are cheap,
+deterministic, LLM-free checks, with LLM-as-judge pushed to a thin top layer (a "test pyramid").
+
+**Locked decisions (2026-06-13):**
+
+1. **Placement:** post-v0.1.0 track (future v0.2 / "M5"). v1 (M2–M4) is untouched.
+2. **Gate substrate:** the **tag API is ctxlineage's `ref()`** — tagged ⇒ exact lineage ⇒ hard CI
+   gate; untagged ⇒ inferred lineage ⇒ advisory only. Same line as progressive enhancement (§3)
+   and the tag-API-only scope of v2 ON/OFF (§4).
+3. **Boundary vs §5:** deterministic **contract/regression tests over the recorded artifact**
+   ("data tests, not model evals"); LLM-as-judge quality scoring / eval datasets / benchmarks stay
+   Non-Goals. Unique lane: **lineage-grounded provenance assertions** (no competitor has
+   context-segment lineage as a first-class artifact).
