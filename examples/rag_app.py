@@ -8,8 +8,8 @@ report shows real, named segment boundaries and a lineage graph instead of role
 heuristics.
 
 Usage:
-    OPENAI_API_KEY=sk-... python examples/rag_app.py     # real API (gpt-4o-mini)
-    python examples/rag_app.py --mock                    # keyless: respx-mocked, offline
+    OPENAI_API_KEY=sk-... uv run python examples/rag_app.py     # real API (gpt-4o-mini)
+    uv run python examples/rag_app.py --mock                    # keyless: respx-mocked, offline
 
 Then: ctxlineage report --open
 """
@@ -159,7 +159,7 @@ def main(argv: list[str] | None = None) -> int:
     if not args.mock and not os.environ.get("OPENAI_API_KEY"):
         print(
             "No OPENAI_API_KEY set. Either export one to run against the real API,\n"
-            "or re-run keyless:  python examples/rag_app.py --mock",
+            "or re-run keyless:  uv run python examples/rag_app.py --mock",
             file=sys.stderr,
         )
         return 2
@@ -170,7 +170,9 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.mock:
         with mock_openai(MOCK_ANSWERS):
-            calls = run_conversation(openai.OpenAI(api_key="ctxlineage-mock"), args.model)
+            # Pin base_url so an exported OPENAI_BASE_URL can't bypass the respx routes.
+            client = openai.OpenAI(api_key="ctxlineage-mock", base_url="https://api.openai.com/v1")
+            calls = run_conversation(client, args.model)
     else:
         calls = run_conversation(openai.OpenAI(), args.model)
 

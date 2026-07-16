@@ -24,7 +24,8 @@ EXAMPLES = Path(__file__).parent.parent / "examples"
 
 def _run_example(script: str, out_dir: Path, *args: str) -> subprocess.CompletedProcess:
     env = {**os.environ, "CTXLINEAGE_DIR": str(out_dir)}
-    env.pop("OPENAI_API_KEY", None)  # keyless: --mock must be fully offline
+    for var in ("OPENAI_API_KEY", "OPENAI_BASE_URL", "OPENAI_ORG_ID", "OPENAI_PROJECT"):
+        env.pop(var, None)  # keyless: --mock must be fully offline
     return subprocess.run(
         [sys.executable, str(EXAMPLES / script), *args],
         env=env,
