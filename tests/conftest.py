@@ -110,6 +110,77 @@ def openai_client():
     return openai.OpenAI(api_key="test-key")
 
 
+_MESSAGES_RESPONSE = {
+    "id": "msg_test1",
+    "type": "message",
+    "role": "assistant",
+    "model": "claude-sonnet-5",
+    "content": [{"type": "text", "text": "Hello there!"}],
+    "stop_reason": "end_turn",
+    "stop_sequence": None,
+    "usage": {"input_tokens": 9, "output_tokens": 3},
+}
+
+
+@pytest.fixture
+def messages_response_json():
+    return dict(_MESSAGES_RESPONSE)
+
+
+def _anthropic_sse(*events) -> bytes:
+    """Anthropic SSE frames are named events; the SDK dispatches on the name."""
+    return b"".join(
+        b"event: " + e["type"].encode() + b"\ndata: " + json.dumps(e).encode() + b"\n\n"
+        for e in events
+    )
+
+
+@pytest.fixture
+def messages_stream_body():
+    """'Hello' + ' world' text deltas, final usage via message_delta."""
+    return _anthropic_sse(
+        {
+            "type": "message_start",
+            "message": {
+                "id": "msg_test1",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-sonnet-5",
+                "content": [],
+                "stop_reason": None,
+                "stop_sequence": None,
+                "usage": {"input_tokens": 9, "output_tokens": 1},
+            },
+        },
+        {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
+        {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {"type": "text_delta", "text": "Hello"},
+        },
+        {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {"type": "text_delta", "text": " world"},
+        },
+        {"type": "content_block_stop", "index": 0},
+        {
+            "type": "message_delta",
+            "delta": {"stop_reason": "end_turn", "stop_sequence": None},
+            "usage": {"output_tokens": 2},
+        },
+        {"type": "message_stop"},
+    )
+
+
+@pytest.fixture
+def anthropic_client():
+    import anthropic
+
+    # max_retries=0: keep the 5xx error tests from sleeping through retry backoff
+    return anthropic.Anthropic(api_key="test-key", max_retries=0)
+
+
 @pytest.fixture
 def valid_llm_call_event():
     return {
