@@ -52,6 +52,24 @@ themeBtn.addEventListener("click", () => {
   applyTheme();
 });
 
+/* ---------- filter ---------- */
+let query = "";
+const filterEl = document.getElementById("filter");
+const norm = (s) => String(s ?? "").toLowerCase();
+function callMatches(s, c) {
+  if (!query) return true;
+  const q = norm(query);
+  return norm(c.model).includes(q) || norm(stepOf(c)).includes(q) || norm(s.id).includes(q) ||
+    (c.error && norm(c.error.type + " " + c.error.message).includes(q)) ||
+    norm(c.output && c.output.content).includes(q) ||
+    c.segments.some((g) => norm(g.content).includes(q) || norm(g.name).includes(q));
+}
+const sessionMatches = (s) => s.calls.some((c) => callMatches(s, c));
+filterEl.addEventListener("input", () => { query = filterEl.value.trim(); render(); });
+addEventListener("keydown", (e) => {
+  if (e.key === "/" && document.activeElement !== filterEl) { e.preventDefault(); filterEl.focus(); }
+});
+
 /* ---------- tabs ---------- */
 document.querySelectorAll(".tab").forEach((t) =>
   t.addEventListener("click", () => {
@@ -74,11 +92,12 @@ const windowPct = (c) => {
 function renderOverviewNav() {
   let h = "<h3>sessions</h3>";
   data.sessions.forEach((s, i) => {
+    if (!sessionMatches(s)) return;
     h += `<div class="sessrow" data-i="${i}">
       <div class="id">${esc(s.id)}</div>
       <div class="sub">${s.calls.length} calls</div></div>`;
   });
-  const nav = document.getElementById("nav");
+  const nav = document.getElementById("navlist");
   nav.innerHTML = h;
   nav.querySelectorAll(".sessrow").forEach((el) =>
     el.addEventListener("click", () => {
@@ -96,9 +115,9 @@ function renderOverview() {
   const promptTok = calls.reduce((a, x) => a + (x.c.usage ? x.c.usage.prompt_tokens : x.c.input_tokens_est ?? 0), 0);
   const outTok = calls.reduce((a, x) => a + (x.c.usage ? x.c.usage.completion_tokens : 0), 0);
 
-  const heaviest = calls.map((x, i) => ({ ...x, i }))
+  const heaviest = calls.map((x, i) => ({ ...x, i })).filter((x) => callMatches(x.s, x.c))
     .sort((a, b) => callTok(b.c) - callTok(a.c)).slice(0, 5);
-  const pressure = calls.map((x, i) => ({ ...x, i, pct: windowPct(x.c) }))
+  const pressure = calls.map((x, i) => ({ ...x, i, pct: windowPct(x.c) })).filter((x) => callMatches(x.s, x.c))
     .filter((x) => x.pct !== null)
     .sort((a, b) => b.pct - a.pct).slice(0, 3);
 
@@ -146,6 +165,7 @@ function renderCallsNav() {
   data.sessions.forEach((s) => {
     h += `<h3>${esc(s.id)}</h3>`;
     s.calls.forEach((c) => {
+      if (!callMatches(s, c)) return;
       const i = calls.findIndex((x) => x.c === c);
       const tok = c.usage ? fmt(c.usage.total_tokens) + " tok" : "–";
       h += `<div class="callrow ${i === selCall ? "sel" : ""}" data-i="${i}">
@@ -156,7 +176,7 @@ function renderCallsNav() {
         ${c.error ? '<span class="badge err">error</span>' : ""}</div>`;
     });
   });
-  const nav = document.getElementById("nav");
+  const nav = document.getElementById("navlist");
   nav.innerHTML = h;
   nav.querySelectorAll(".callrow").forEach((el) =>
     el.addEventListener("click", () => { selCall = +el.dataset.i; render(); }));
@@ -270,17 +290,18 @@ function findLoops(session, edges) {
 function renderChainNav() {
   let h = "";
   data.sessions.forEach((s, i) => {
+    if (!sessionMatches(s)) return;
     h += `<div class="sessrow ${i === selSession ? "sel" : ""}" data-i="${i}">
       <div class="id">${esc(s.id)}</div>
       <div class="sub">${s.calls.length} calls</div></div>`;
   });
-  const nav = document.getElementById("nav");
+  const nav = document.getElementById("navlist");
   nav.innerHTML = h;
   nav.querySelectorAll(".sessrow").forEach((el) =>
     el.addEventListener("click", () => { selSession = +el.dataset.i; hiFrom = null; render(); }));
 }
 
-function chainNodeHtml(c, i, targets, downstream) {
+function chainNodeHtml(sess, c, i, targets, downstream) {
   const agg = new Map();
   c.segments.forEach((g) => {
     const key = g.kind === "tool" ? `tool:${g.name ?? "tool"}` : g.kind;
@@ -309,7 +330,7 @@ function chainNodeHtml(c, i, targets, downstream) {
     : `<div class="outchip ${hiFrom === i ? "hi" : ""}" data-i="${i}">
        <div class="t"><b>output</b><span>${ds} ${c.usage ? fmt(c.usage.completion_tokens) + " tok" : ""}</span></div>
        <div class="p">${esc(c.output ? c.output.content : "")}</div></div>`;
-  return `<div class="node ${targets.includes(i) ? "hi-target" : ""}" data-n="${i}">
+  return `<div class="node ${targets.includes(i) ? "hi-target" : ""}${query && !callMatches(sess, c) ? " dim" : ""}" data-n="${i}">
     <span class="nlabel">${i + 1}</span>
     <div><div class="chips">${chips}</div><div class="minibar">${minibar}</div></div>
     <div class="fnpill"><div class="step">${esc(stepOf(c) ?? "llm call")}()</div>
@@ -346,11 +367,11 @@ function renderChain() {
       const [a, b] = loop;
       body += `<div class="loopbox"><span class="loophead">↺ loop ×${b - a + 1}
         <span class="why">${esc(stepOf(s.calls[a]) ?? "same fn")}() repeats — each output feeds the next input</span></span>`;
-      for (let k = a; k <= b; k++) body += chainNodeHtml(s.calls[k], k, targets, dsCount(k));
+      for (let k = a; k <= b; k++) body += chainNodeHtml(s, s.calls[k], k, targets, dsCount(k));
       body += `</div>`;
       i = b + 1;
     } else {
-      body += chainNodeHtml(s.calls[i], i, targets, dsCount(i));
+      body += chainNodeHtml(s, s.calls[i], i, targets, dsCount(i));
       i += 1;
     }
   }
@@ -433,6 +454,20 @@ function drawEdges() {
 
 /* ---------- root render ---------- */
 function render() {
+  /* filtering away the current selection jumps to the first match */
+  if (query) {
+    if (view === "chain" && data.sessions[selSession] && !sessionMatches(data.sessions[selSession])) {
+      const idx = data.sessions.findIndex(sessionMatches);
+      if (idx >= 0) { selSession = idx; hiFrom = null; }
+    }
+    if (view === "calls" && calls[selCall] && !callMatches(calls[selCall].s, calls[selCall].c)) {
+      const idx = calls.findIndex((x) => callMatches(x.s, x.c));
+      if (idx >= 0) selCall = idx;
+    }
+  }
+  const matching = calls.filter((x) => callMatches(x.s, x.c)).length;
+  document.getElementById("fcount").textContent =
+    query ? `${matching} / ${calls.length} calls match` : "";
   document.querySelectorAll(".tab").forEach((t) =>
     t.classList.toggle("sel", t.dataset.view === view));
   document.body.dataset.view = view;
