@@ -46,7 +46,7 @@ jobs:
       # this step is allowed to fail.
       - name: Upload coverage
         if: matrix.python-version == '3.13'
-        uses: codecov/codecov-action@v5
+        uses: codecov/codecov-action@v7
         continue-on-error: true
         with:
           files: coverage.xml
