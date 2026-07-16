@@ -36,3 +36,4 @@ frontend/dist/
 
 # Generated report artifacts
 ctxlineage-report.html
+coverage.xml

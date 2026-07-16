@@ -7,6 +7,7 @@
   --sys: #1FBFAE; --user: #4A90D9; --assistant: #9B7EDE; --tool: #E8A33D;
   --tooldef: #b08a3e; --err: #d9534a; --track: #e8edf1;
   --fn-bg: #252B33; --fn-border: #252B33; --fn-text: #e8ecf1; --fn-muted: #94a0ac;
+  --src-bg: #eef2f5; --edge-dim: rgba(107, 118, 130, .35);
   --edge: rgba(31, 191, 174, .75); --edge-hi: #11897d;
   --tag1: #3BA55D; --tag2: #D0699E; --tag3: #3FA7BD; --tag4: #9A8F2B; --tag5: #C46B5A;
 }
@@ -14,6 +15,7 @@
   --bg: #1b2026; --panel: #252B33; --text: #e8ecf1; --muted: #94a0ac;
   --border: #39414b; --hover: #2d343d; --active: #1f3a38; --track: #39414b;
   --fn-bg: #2e3741; --fn-border: rgba(31, 191, 174, .45);
+  --src-bg: #2d343d; --edge-dim: rgba(148, 160, 172, .25);
   --edge: rgba(31, 191, 174, .8); --edge-hi: #5fe8d9;
 }
 * { box-sizing: border-box; }
@@ -196,3 +198,8 @@ svg#edges { position: absolute; inset: 0; pointer-events: none; z-index: 2;
 .toprow .pressure .bar { height: 8px; border-radius: 4px; background: var(--track);
                          overflow: hidden; }
 .toprow .pressure .bar i { display: block; height: 100%; background: var(--teal); }
+
+/* graph view */
+#graphwrap svg text { font: 12px ui-sans-serif, system-ui, sans-serif; }
+#graphwrap .nodebox { cursor: pointer; }
+#graphwrap .dimmed { opacity: .25; }

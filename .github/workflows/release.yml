@@ -1,0 +1,30 @@
+name: release
+# Tag-driven PyPI release via OIDC Trusted Publishing (no API token secrets).
+# Requires: PyPI pending publisher configured for this repo/workflow, and a
+# GitHub environment named `pypi`. Inert until a v* tag is pushed.
+on:
+  push:
+    tags: ["v*"]
+permissions:
+  contents: read
+jobs:
+  verify:
+    if: github.repository == 'ctxlineage/ctxlineage'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v7
+      - run: uv sync
+      - run: uv run ruff check .
+      - run: uv run pytest -q
+  publish:
+    needs: verify
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v7
+      - run: uv build
+      - uses: pypa/gh-action-pypi-publish@release/v1

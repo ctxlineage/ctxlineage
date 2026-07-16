@@ -470,3 +470,67 @@ def test_retagging_updates_element_provenance():
     data = normalize.build_report_data(events)
     (element,) = data["sessions"][0]["elements"]
     assert element["source"] == "qdrant:y"  # last write wins
+
+
+def test_element_token_aggregation():
+    events = _span_events("THE CHUNK TEXT", "Context:\nTHE CHUNK TEXT\nQ: hi")
+    data = normalize.build_report_data(events)
+    (element,) = data["sessions"][0]["elements"]
+    call = data["sessions"][0]["calls"][0]
+    tagged_tok = sum(s["tokens_est"] for s in call["segments"] if s.get("tagged"))
+    assert element["tokens_est"] == tagged_tok > 0
+
+
+def test_unmatched_element_has_zero_tokens():
+    events = _span_events("text that appears nowhere at all", "Q: hi there friend")
+    data = normalize.build_report_data(events)
+    (element,) = data["sessions"][0]["elements"]
+    assert element["tokens_est"] == 0
+
+
+def test_anthropic_usage_vocabulary_canonicalized():
+    event = _call_event(
+        "c1",
+        "2026-07-16T09:00:00+00:00",
+        [{"role": "user", "content": "hello there my friend"}],
+        "hi from claude model",
+    )
+    event["payload"]["provider"] = "anthropic"
+    event["payload"]["api"] = "messages"
+    event["payload"]["usage"] = {"input_tokens": 12, "output_tokens": 5}
+    data = normalize.build_report_data([event])
+    usage = data["sessions"][0]["calls"][0]["usage"]
+    assert usage["prompt_tokens"] == 12
+    assert usage["completion_tokens"] == 5
+    assert usage["total_tokens"] == 17
+    assert usage["input_tokens"] == 12  # original keys pass through
+
+
+def test_openai_usage_untouched():
+    event = _call_event(
+        "c1",
+        "2026-07-16T09:00:00+00:00",
+        [{"role": "user", "content": "hello there my friend"}],
+        "hi from the assistant",
+    )
+    event["payload"]["usage"] = {"prompt_tokens": 20, "completion_tokens": 5, "total_tokens": 25}
+    usage = normalize.build_report_data([event])["sessions"][0]["calls"][0]["usage"]
+    assert usage == {"prompt_tokens": 20, "completion_tokens": 5, "total_tokens": 25}
+
+
+def test_both_usage_vocabularies_present_no_double_count():
+    event = _call_event(
+        "c1",
+        "2026-07-16T09:00:00+00:00",
+        [{"role": "user", "content": "hello there my friend"}],
+        "hi from claude model",
+    )
+    event["payload"]["usage"] = {
+        "prompt_tokens": 12,
+        "completion_tokens": 5,
+        "total_tokens": 17,
+        "input_tokens": 12,
+        "output_tokens": 5,
+    }
+    usage = normalize.build_report_data([event])["sessions"][0]["calls"][0]["usage"]
+    assert usage == event["payload"]["usage"]  # openai vocabulary wins, nothing recomputed

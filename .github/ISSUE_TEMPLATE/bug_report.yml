@@ -1,0 +1,29 @@
+name: Bug report
+description: Something broke or captured/rendered incorrectly
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: Include the command or code you ran and what went wrong.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What did you expect?
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Minimal reproduction
+      description: Smallest snippet / events.jsonl excerpt that shows the problem (redact prompts!).
+  - type: input
+    id: version
+    attributes:
+      label: Versions
+      placeholder: ctxlineage 0.1.0 / openai 2.41.1 / Python 3.12 / macOS
+    validations:
+      required: true

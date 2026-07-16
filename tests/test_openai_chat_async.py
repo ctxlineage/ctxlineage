@@ -50,3 +50,19 @@ async def test_async_stream_assembles_content(
     validate_event(event)
     assert event["payload"]["response"]["content"]["0"] == "Hello world"
     assert event["payload"]["usage"]["total_tokens"] == 11
+
+
+@respx.mock
+async def test_builtin_anext_works_and_records(capture, async_client, chat_stream_body):
+    respx.post(CHAT_URL).mock(
+        return_value=httpx.Response(200, headers=SSE_HEADERS, content=chat_stream_body)
+    )
+    stream = await async_client.chat.completions.create(
+        model="gpt-4o-mini", messages=MESSAGES, stream=True
+    )
+    first = await anext(stream)  # builtin anext() on the proxy itself
+    assert first.choices[0].delta.content == "Hello"
+    rest = [c async for c in stream]  # mixed consumption continues where anext() left off
+    assert len(rest) == 3
+    (event,) = capture()
+    assert event["payload"]["response"]["content"]["0"] == "Hello world"

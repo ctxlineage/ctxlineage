@@ -131,3 +131,51 @@ def test_japanese_tag_content_round_trips(capture):
     assert json.loads(tag["payload"]["content"]) == ["日本語のチャンク🎌"]
     starts = [e for e in capture() if e["event_type"] == "span_start"]
     assert starts[0]["payload"]["name"] == "回答"
+
+
+ANTHROPIC_URL = "https://api.anthropic.com/v1/messages"
+
+
+@respx.mock
+def test_anthropic_call_inside_span_carries_span_id(
+    capture, anthropic_client, messages_response_json
+):
+    respx.post(ANTHROPIC_URL).mock(return_value=httpx.Response(200, json=messages_response_json))
+    with ctxlineage.span("qa") as sp:
+        anthropic_client.messages.create(model="claude-sonnet-5", max_tokens=64, messages=MESSAGES)
+    calls = [e for e in capture() if e["event_type"] == "llm_call"]
+    assert len(calls) == 1
+    assert calls[0]["span_id"] == sp.span_id
+
+
+@respx.mock
+def test_anthropic_stream_consumed_after_span_exit_keeps_span_id(
+    capture, anthropic_client, messages_stream_body
+):
+    respx.post(ANTHROPIC_URL).mock(
+        return_value=httpx.Response(200, headers=SSE_HEADERS, content=messages_stream_body)
+    )
+    with ctxlineage.span("streamer") as sp:
+        stream = anthropic_client.messages.create(
+            model="claude-sonnet-5", max_tokens=64, messages=MESSAGES, stream=True
+        )
+    list(stream)  # consumed after the span closed
+    calls = [e for e in capture() if e["event_type"] == "llm_call"]
+    assert calls[0]["span_id"] == sp.span_id
+
+
+@respx.mock
+def test_anthropic_stream_helper_entered_after_span_exit_keeps_span_id(
+    capture, anthropic_client, messages_stream_body
+):
+    respx.post(ANTHROPIC_URL).mock(
+        return_value=httpx.Response(200, headers=SSE_HEADERS, content=messages_stream_body)
+    )
+    with ctxlineage.span("streamer") as sp:
+        manager = anthropic_client.messages.stream(
+            model="claude-sonnet-5", max_tokens=64, messages=MESSAGES
+        )
+    with manager as stream:  # entered AND consumed after the span closed
+        "".join(stream.text_stream)
+    calls = [e for e in capture() if e["event_type"] == "llm_call"]
+    assert calls[0]["span_id"] == sp.span_id
