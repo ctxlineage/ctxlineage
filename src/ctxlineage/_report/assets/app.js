@@ -46,6 +46,7 @@ let view = "overview";
 let selCall = 0;
 let selSession = 0;
 let hiFrom = null;
+let chainEdges = [];
 
 const calls = [];
 data.sessions.forEach((s, si) => s.calls.forEach((c) => calls.push({ s, si, c })));
@@ -373,8 +374,11 @@ function renderChain() {
   const s = data.sessions[selSession];
   const edges = findEdges(s);
   const loops = findLoops(s, edges);
+  chainEdges = edges;  // cache for drawEdges (avoid recomputing per frame)
   const targets = hiFrom === null ? [] : edges.filter((e) => e[0] === hiFrom).map((e) => e[1]);
-  const dsCount = (i) => edges.filter((e) => e[0] === i && e[1] > i + 1).length;
+  const dsMap = new Map();
+  edges.forEach(([a, b]) => { if (b > a + 1) dsMap.set(a, (dsMap.get(a) || 0) + 1); });
+  const dsCount = (i) => dsMap.get(i) || 0;
 
   let h = `<div class="legend">
       <span><i style="background:var(--sys)"></i>app</span>
@@ -441,7 +445,7 @@ function drawEdges() {
     <marker id="arrhi" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
       <path d="M0,0 L10,5 L0,10 z" fill="${bodyStyle.getPropertyValue("--edge-hi").trim() || "#11897d"}"/></marker>
   </defs>`;
-  const all = findEdges(s);
+  const all = chainEdges.length ? chainEdges : findEdges(s);
   /* default: only the quiet adjacent chain; click an output to fan out its downstream */
   const visible = hiFrom === null
     ? all.filter(([i, j]) => j === i + 1)

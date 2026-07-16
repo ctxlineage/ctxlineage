@@ -35,3 +35,8 @@ open /tmp/ctxl-design/chain.html
 
 Templates contain a `__DATA__` placeholder that receives the report data JSON
 (`ctxlineage report --json` shape, `report_version: 1`).
+
+> **Historical record.** These templates predate M3: they still infer chain
+> edges client-side, while the shipped report reads backend-computed
+> `sessions[].edges` (normalize.py). Do not treat them as the current
+> implementation reference.

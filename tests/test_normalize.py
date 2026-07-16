@@ -389,3 +389,84 @@ def test_elements_list_carries_provenance_and_consumers():
     assert element["span_name"] == "answer_query"
     assert element["matched"] is True
     assert element["calls"] == ["c1"]
+
+
+def test_edge_survives_tag_split_in_consumer():
+    answer = "The webhook secret rotates every 90 days."
+    consumer = _call_event(
+        "c2",
+        "2026-07-16T09:01:00+00:00",
+        [{"role": "user", "content": "Earlier: " + answer + " Why?"}],
+        "Because policy.",
+        span_id="sp1",
+    )
+    events = _span_events("webhook secret", "unused") + [
+        _call_event(
+            "c1", "2026-07-16T09:00:30+00:00", [{"role": "user", "content": "How often?"}], answer
+        ),
+    ]
+    # the tag splits c2's message right through the echoed answer
+    events[2] = consumer  # replace the span-events template call with the consumer
+    data = normalize.build_report_data(events)
+    edges = data["sessions"][0]["edges"]
+    assert {"from": "c1", "to": "c2", "kind": "output_text"} in edges
+
+
+def test_edge_fanout_cap_sets_truncated_flag():
+    answer = "This exact sentence gets echoed everywhere downstream."
+    events = [
+        _call_event("src", "2026-07-16T08:00:00+00:00", [{"role": "user", "content": "go"}], answer)
+    ] + [
+        _call_event(
+            f"t{i:03d}",
+            f"2026-07-16T09:{i // 60:02d}:{i % 60:02d}+00:00",
+            [{"role": "user", "content": "ref: " + answer}],
+            "ok fine done today",
+        )
+        for i in range(40)
+    ]
+    data = normalize.build_report_data(events)
+    session = data["sessions"][0]
+    out_edges = [e for e in session["edges"] if e["kind"] == "output_text" and e["from"] == "src"]
+    assert len(out_edges) == 32  # capped
+    assert session["edges_truncated"] is True
+
+
+def test_same_span_chain_survives_interleaving():
+    events = [
+        _call_event(
+            "a1",
+            "2026-07-16T09:00:00+00:00",
+            [{"role": "user", "content": "one"}],
+            "short",
+            span_id="spA",
+        ),
+        _call_event(
+            "b1",
+            "2026-07-16T09:01:00+00:00",
+            [{"role": "user", "content": "two"}],
+            "short",
+            span_id="spB",
+        ),
+        _call_event(
+            "a2",
+            "2026-07-16T09:02:00+00:00",
+            [{"role": "user", "content": "three"}],
+            "short",
+            span_id="spA",
+        ),
+    ]
+    data = normalize.build_report_data(events)
+    edges = data["sessions"][0]["edges"]
+    assert {"from": "a1", "to": "a2", "kind": "same_span"} in edges
+
+
+def test_retagging_updates_element_provenance():
+    events = _span_events("THE CHUNK TEXT", "Context:\nTHE CHUNK TEXT\nQ: hi")
+    retag = dict(events[1])
+    retag["payload"] = {"name": "rag_chunks", "content": "THE CHUNK TEXT", "source": "qdrant:y"}
+    retag["timestamp"] = "2026-07-16T09:00:01.500000+00:00"
+    events.insert(2, retag)
+    data = normalize.build_report_data(events)
+    (element,) = data["sessions"][0]["elements"]
+    assert element["source"] == "qdrant:y"  # last write wins

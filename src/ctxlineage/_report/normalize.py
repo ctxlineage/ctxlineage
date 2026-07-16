@@ -194,22 +194,48 @@ def _normalize_call(event: dict, span_names=None, span_tags=None) -> tuple[dict,
 
 
 _MIN_EDGE_TEXT = 15  # shorter outputs match everywhere; not evidence of flow
+_MAX_EDGE_LOOKAHEAD = 500  # calls scanned ahead of each source
+_MAX_EDGES_PER_SOURCE = 32  # fan-out cap per source call
 
 
-def _session_edges(calls: list[dict]) -> list[dict]:
-    """PLAN 4(b) inference: output->later-input text match + same-span chains."""
+def _session_edges(calls: list[dict]) -> tuple[list[dict], bool]:
+    """PLAN 4(b) inference: output->later-input text match + same-span chains.
+
+    Matches against each call's JOINED input text (tag splitting must not hide
+    a flow), with honest caps for pathological sessions (accumulating chats
+    make every output a substring of every later input). A pair can carry both
+    an output_text and a same_span edge — consumers dedupe by (from, to) when
+    counting. Returns (edges, truncated).
+    """
     edges: list[dict] = []
+    truncated = False
+    haystacks = ["".join(seg["content"] for seg in c["segments"]) for c in calls]
     for i, call in enumerate(calls):
         output = ((call.get("output") or {}).get("content")) or ""
-        if len(output) >= _MIN_EDGE_TEXT:
-            for later in calls[i + 1 :]:
-                if any(output in seg["content"] for seg in later["segments"]):
-                    edges.append({"from": call["id"], "to": later["id"], "kind": "output_text"})
-        if i + 1 < len(calls):
-            nxt = calls[i + 1]
-            if call.get("span_id") and call["span_id"] == nxt.get("span_id"):
-                edges.append({"from": call["id"], "to": nxt["id"], "kind": "same_span"})
-    return edges
+        if len(output) < _MIN_EDGE_TEXT or not call.get("id"):
+            continue
+        if len(calls) - (i + 1) > _MAX_EDGE_LOOKAHEAD:
+            truncated = True
+        hits = 0
+        for j in range(i + 1, min(len(calls), i + 1 + _MAX_EDGE_LOOKAHEAD)):
+            later = calls[j]
+            if later.get("id") and later["id"] != call["id"] and output in haystacks[j]:
+                edges.append({"from": call["id"], "to": later["id"], "kind": "output_text"})
+                hits += 1
+                if hits >= _MAX_EDGES_PER_SOURCE:
+                    truncated = True
+                    break
+    # same-span chains link consecutive calls OF THE SAME SPAN, surviving
+    # interleaved spans in one session
+    by_span: dict = {}
+    for call in calls:
+        if call.get("span_id") and call.get("id"):
+            by_span.setdefault(call["span_id"], []).append(call["id"])
+    for ids in by_span.values():
+        for a, b in zip(ids, ids[1:]):
+            if a != b:
+                edges.append({"from": a, "to": b, "kind": "same_span"})
+    return edges, truncated
 
 
 def build_report_data(events: list[dict]) -> dict:
@@ -224,10 +250,11 @@ def build_report_data(events: list[dict]) -> dict:
             span_names[span_id] = payload.get("name")
         elif kind == "tag" and span_id:
             span_tags.setdefault(span_id, []).append(payload)
-            tag_meta.setdefault(
-                (span_id, payload.get("name")),
-                {"session": event.get("session_id", "unknown"), "payload": payload},
-            )
+            # last write wins: re-tagging the same name updates provenance
+            tag_meta[(span_id, payload.get("name"))] = {
+                "session": event.get("session_id", "unknown"),
+                "payload": payload,
+            }
 
     sessions: dict[str, list[dict]] = {}
     errors = 0
@@ -249,6 +276,7 @@ def build_report_data(events: list[dict]) -> dict:
     session_list = []
     for session_id, calls in sessions.items():
         calls.sort(key=lambda c: c["timestamp"] or "")
+        edges, truncated = _session_edges(calls)
         elements = [
             {
                 "name": name,
@@ -268,7 +296,8 @@ def build_report_data(events: list[dict]) -> dict:
                 "started_at": calls[0]["timestamp"],
                 "ended_at": calls[-1]["timestamp"],
                 "calls": calls,
-                "edges": _session_edges(calls),
+                "edges": edges,
+                "edges_truncated": truncated,
                 "elements": elements,
             }
         )
