@@ -34,12 +34,13 @@ const clip = (t, n) => {
   return s;
 };
 const stepOf = (c) => {
-  if (c.step) return c.step;  // span name wins
+  // label split (design decision 6): innermost user function names the call;
+  // the span name is grouping info (brackets, fn-card row), and the fallback
   const frame = c.call_stack && c.call_stack[0];
-  if (!frame) return null;
-  const parts = frame.split(":");
-  return parts.length >= 2 ? parts[1] : null;
+  const fn = frame ? frame.split(":")[1] : null;
+  return fn || c.step || null;
 };
+const spanNameOf = (c) => c.step || null;
 
 /* ---------- state ---------- */
 let view = "overview";
@@ -93,7 +94,7 @@ document.querySelectorAll(".tab").forEach((t) =>
   t.addEventListener("click", () => {
     if (view === t.dataset.view) return;
     view = t.dataset.view;
-    if (view === "chain" && calls[selCall]) selSession = calls[selCall].si;
+    if ((view === "chain" || view === "graph") && calls[selCall]) selSession = calls[selCall].si;
     hiFrom = null;
     render();
   }));
@@ -256,6 +257,7 @@ function renderCallDetail() {
       <div class="row"><span>api</span><span>${esc(c.api)}</span></div>
       <div class="row"><span>duration</span><span>${c.duration_ms ? c.duration_ms.toFixed(0) + " ms" : "–"}</span></div>
       <div class="row"><span>mode</span><span>${c.stream ? "streaming" : "sync"}</span></div>
+      ${spanNameOf(c) && spanNameOf(c) !== stepOf(c) ? `<div class="row"><span>span</span><span>${esc(spanNameOf(c))}</span></div>` : ""}
       ${c.usage ? `<div class="row"><span>usage</span><span>${fmt(c.usage.total_tokens)} tok</span></div>` : ""}
       ${instr}
     </div>`;
@@ -324,7 +326,7 @@ function renderChainNav() {
   const nav = document.getElementById("navlist");
   nav.innerHTML = h;
   nav.querySelectorAll(".sessrow").forEach((el) =>
-    el.addEventListener("click", () => { selSession = +el.dataset.i; hiFrom = null; render(); }));
+    el.addEventListener("click", () => { selSession = +el.dataset.i; hiFrom = null; graphFocus = null; render(); }));
 }
 
 function chainNodeHtml(sess, c, i, targets, downstream) {
@@ -481,6 +483,187 @@ function drawEdges() {
   svg.innerHTML = h;
 }
 
+
+/* ================= graph view (lineage) ================= */
+
+let graphFocus = null;
+
+function buildGraph(s) {
+  const nodes = [], edges = [];
+  const elements = s.elements || [];
+  const srcNames = [...new Set(elements.map((e) => e.source).filter(Boolean))];
+  srcNames.forEach((name) => nodes.push({ id: "src:" + name, type: "source", label: name }));
+  elements.forEach((e, i) => {
+    const id = "el:" + i;
+    nodes.push({ id, type: "element", label: e.name, source: e.source, tok: e.tokens_est || 0,
+                 transform: e.transform, matched: e.matched });
+    if (e.source) edges.push({ from: "src:" + e.source, to: id, kind: "provenance" });
+    (e.calls || []).forEach((cid) => edges.push({ from: id, to: "call:" + cid, kind: "feeds" }));
+  });
+  s.calls.forEach((c) => nodes.push({ id: "call:" + c.id, type: "call", label: (stepOf(c) ?? "llm call") + "()",
+    model: c.model, tok: c.usage ? c.usage.total_tokens : c.input_tokens_est, error: !!c.error }));
+  const seen = new Set();
+  (s.edges || []).forEach((e) => {
+    const key = e.from + ">" + e.to;
+    if (e.kind === "output_text" && !seen.has(key)) {
+      seen.add(key);
+      edges.push({ from: "call:" + e.from, to: "call:" + e.to, kind: "flows" });
+    }
+  });
+  return { nodes, edges };
+}
+
+function lineageClosure(graph, id) {
+  const out = new Set([id]);
+  const walk = (dir) => {
+    const stack = [id];
+    while (stack.length) {
+      const cur = stack.pop();
+      graph.edges.forEach((e) => {
+        const nxt = dir === "down" ? (e.from === cur ? e.to : null) : (e.to === cur ? e.from : null);
+        if (nxt && !out.has(nxt)) { out.add(nxt); stack.push(nxt); }
+      });
+    }
+  };
+  walk("down"); walk("up");
+  return out;
+}
+
+function renderGraphView() {
+  const main = document.getElementById("main");
+  const s = data.sessions[selSession];
+  if (!s) { main.innerHTML = '<div class="empty">No LLM calls recorded yet.</div>'; return; }
+  const g = buildGraph(s);
+  const lit = graphFocus ? lineageClosure(g, graphFocus) : null;
+
+  const COLX = { source: 10, element: 260, call: 560 };
+  const W = { source: 210, element: 250, call: 240 };
+  const H = { source: 34, element: 46, call: 52 };
+  const GAPY = 26;
+
+  const y = {};
+  s.calls.forEach((c, i) => { y["call:" + c.id] = 40 + i * (H.call + GAPY + 14); });
+  const els = g.nodes.filter((n) => n.type === "element");
+  els.forEach((n, i) => {
+    const feeds = g.edges.filter((e) => e.from === n.id && e.kind === "feeds").map((e) => y[e.to] ?? 0);
+    n.want = feeds.length ? feeds.reduce((a, b) => a + b, 0) / feeds.length : 40 + i * 60;
+  });
+  els.sort((a, b) => a.want - b.want);
+  let cursor = 30;
+  els.forEach((n) => { y[n.id] = Math.max(n.want, cursor); cursor = y[n.id] + H.element + GAPY; });
+  const srcs = g.nodes.filter((n) => n.type === "source");
+  srcs.forEach((n, i) => {
+    const outs = g.edges.filter((e) => e.from === n.id).map((e) => y[e.to] ?? 0);
+    n.want = outs.length ? outs.reduce((a, b) => a + b, 0) / outs.length : 30 + i * 60;
+  });
+  srcs.sort((a, b) => a.want - b.want);
+  cursor = 30;
+  srcs.forEach((n) => { y[n.id] = Math.max(n.want, cursor); cursor = y[n.id] + H.source + GAPY; });
+
+  const height = Math.max(60, ...Object.values(y)) + 120;
+  const laneBase = COLX.call + W.call + 30;
+  const maxTok = Math.max(1, ...els.map((n) => n.tok || 0));
+  const nodeDim = (id) => (lit && !lit.has(id) ? "dimmed" : "");
+  const edgeLit = (e) => lit && lit.has(e.from) && lit.has(e.to);
+  const edgeStroke = (e) => (lit ? (edgeLit(e) ? "var(--edge-hi)" : "var(--edge-dim)") : "var(--edge)");
+
+  let defs = `<defs>
+    <marker id="garr" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="var(--edge)"/></marker>
+    <marker id="garrhi" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="var(--edge-hi)"/></marker>
+  </defs>`;
+
+  let eh = "";
+  let lane = 0;
+  g.edges.forEach((e) => {
+    const hi = edgeLit(e);
+    if (e.kind === "flows") {
+      const x1 = COLX.call + W.call, y1 = y[e.from] + H.call / 2;
+      const y2 = y[e.to] + H.call / 2;
+      const lx = laneBase + (lane++ % 5) * 14;
+      eh += `<path d="M ${x1} ${y1} L ${lx - 8} ${y1} Q ${lx} ${y1} ${lx} ${y1 + 8} L ${lx} ${y2 - 8} Q ${lx} ${y2} ${lx - 8} ${y2} L ${x1 + 2} ${y2}"
+        fill="none" stroke="${edgeStroke(e)}" stroke-width="${hi ? 2.5 : 1.8}" stroke-linejoin="round"
+        marker-end="url(#${hi ? "garrhi" : "garr"})"/>`;
+    } else {
+      const fromType = e.from.startsWith("src:") ? "source" : "element";
+      const x1 = COLX[fromType] + W[fromType], y1 = y[e.from] + H[fromType] / 2;
+      const toType = e.to.startsWith("el:") ? "element" : "call";
+      const x2 = COLX[toType], y2 = y[e.to] + H[toType] / 2;
+      const mid = (x1 + x2) / 2;
+      eh += `<path d="M ${x1} ${y1} C ${mid} ${y1}, ${mid} ${y2}, ${x2 - 2} ${y2}"
+        fill="none" stroke="${edgeStroke(e)}" stroke-width="${hi ? 2.5 : 1.6}"
+        marker-end="url(#${hi ? "garrhi" : "garr"})"/>`;
+    }
+  });
+
+  // span brackets (design decision 2)
+  let bh = "";
+  let runStart = 0;
+  for (let i = 1; i <= s.calls.length; i++) {
+    const prev = s.calls[i - 1], cur = s.calls[i];
+    if (!cur || cur.span_id !== prev.span_id) {
+      if (prev.span_id) {
+        const y1 = y["call:" + s.calls[runStart].id];
+        const y2 = y["call:" + prev.id] + H.call;
+        const bx = COLX.call - 16;
+        bh += `<path d="M ${bx + 6} ${y1} L ${bx} ${y1} L ${bx} ${y2} L ${bx + 6} ${y2}"
+                 fill="none" stroke="var(--muted)" stroke-width="1.5"/>
+               <text x="${bx - 4}" y="${y1 - 4}" style="fill:var(--muted)" font-size="10.5">${esc(spanNameOf(prev) || "span")}</text>`;
+      }
+      runStart = i;
+    }
+  }
+
+  let nh = "";
+  g.nodes.forEach((n) => {
+    const cls = `nodebox ${nodeDim(n.id)}`;
+    if (n.type === "source") {
+      nh += `<g class="${cls}" data-id="${n.id}">
+        <rect x="${COLX.source}" y="${y[n.id]}" width="${W.source}" height="${H.source}" rx="7"
+          fill="var(--src-bg)" stroke="var(--border)"/>
+        <text x="${COLX.source + 10}" y="${y[n.id] + 22}" style="fill:var(--muted)">${esc(n.label)}</text></g>`;
+    } else if (n.type === "element") {
+      nh += `<g class="${cls}" data-id="${n.id}">
+        <rect x="${COLX.element}" y="${y[n.id]}" width="${W.element}" height="${H.element}" rx="9"
+          fill="var(--panel)" stroke="${n.matched ? kindColor(n.label) : "var(--muted)"}"
+          stroke-width="1.6" ${n.matched ? "" : 'stroke-dasharray="5 4"'}/>
+        <rect x="${COLX.element}" y="${y[n.id]}" width="5" height="${H.element}" rx="2.5" fill="${kindColor(n.label)}"/>
+        <text x="${COLX.element + 14}" y="${y[n.id] + 19}" font-weight="700" style="fill:${kindColor(n.label)}">${esc(n.label)}</text>
+        <text x="${COLX.element + 14}" y="${y[n.id] + 36}" style="fill:var(--muted)" font-size="11">
+          ${n.tok ? fmt(n.tok) + " tok · " : ""}${esc(n.transform ? n.transform : n.matched ? "matched" : "unmatched")}</text>
+        ${n.tok ? `<rect x="${COLX.element + 14}" y="${y[n.id] + H.element - 7}" width="${Math.max(6, (W.element - 28) * n.tok / maxTok)}" height="3" rx="1.5" fill="${kindColor(n.label)}" opacity=".8"/>` : ""}</g>`;
+    } else {
+      nh += `<g class="${cls}" data-id="${n.id}">
+        <rect x="${COLX.call}" y="${y[n.id]}" width="${W.call}" height="${H.call}" rx="11"
+          fill="var(--fn-bg)" stroke="${n.error ? "var(--err)" : "var(--fn-border)"}"/>
+        <text x="${COLX.call + 14}" y="${y[n.id] + 21}" font-weight="700" style="fill:var(--fn-text)"
+          font-family="ui-monospace, monospace" font-size="12.5">${esc(n.label)}</text>
+        <text x="${COLX.call + 14}" y="${y[n.id] + 38}" style="fill:var(--teal)" font-size="11">
+          ${esc(n.model)} · ${n.tok != null ? fmt(n.tok) : "–"} tok</text></g>`;
+    }
+  });
+
+  const heads = `
+    <text style="fill:var(--muted)" font-size="11" letter-spacing=".08em" x="${COLX.source}" y="16">SOURCES</text>
+    <text style="fill:var(--muted)" font-size="11" letter-spacing=".08em" x="${COLX.element}" y="16">CONTEXT ELEMENTS</text>
+    <text style="fill:var(--muted)" font-size="11" letter-spacing=".08em" x="${COLX.call}" y="16">LLM CALLS ↓ TIME</text>`;
+
+  const hint = (s.elements || []).length ? "" :
+    `<div class="note" style="margin:0 0 12px; max-width:560px">No tagged elements in this session —
+     wrap calls in <b>ctxlineage.span()</b> and <b>tag()</b> your chunks/prompts to see where
+     context comes from. Output→input flows are still shown below.</div>`;
+  main.innerHTML = `<div id="graphwrap">${hint}
+    <svg width="${laneBase + 110}" height="${height}" style="overflow:visible">${defs}${bh}${heads}${eh}${nh}</svg>
+    <div class="note">click any node to trace its lineage (upstream + downstream); click again to clear.
+    dashed element = tagged but never matched.</div></div>`;
+  main.querySelectorAll(".nodebox").forEach((el) =>
+    el.addEventListener("click", () => {
+      graphFocus = graphFocus === el.dataset.id ? null : el.dataset.id;
+      render();
+    }));
+}
+
 /* ---------- root render ---------- */
 function render() {
   /* filtering away the current selection jumps to the first match */
@@ -502,6 +685,7 @@ function render() {
   document.body.dataset.view = view;
   if (view === "overview") { renderOverviewNav(); renderOverview(); }
   else if (view === "calls") { renderCallsNav(); renderCallDetail(); }
+  else if (view === "graph") { renderChainNav(); renderGraphView(); }
   else { renderChainNav(); renderChain(); }
 }
 

@@ -470,3 +470,44 @@ def test_retagging_updates_element_provenance():
     data = normalize.build_report_data(events)
     (element,) = data["sessions"][0]["elements"]
     assert element["source"] == "qdrant:y"  # last write wins
+
+
+def test_element_token_aggregation():
+    events = _span_events("THE CHUNK TEXT", "Context:\nTHE CHUNK TEXT\nQ: hi")
+    data = normalize.build_report_data(events)
+    (element,) = data["sessions"][0]["elements"]
+    call = data["sessions"][0]["calls"][0]
+    tagged_tok = sum(s["tokens_est"] for s in call["segments"] if s.get("tagged"))
+    assert element["tokens_est"] == tagged_tok > 0
+
+
+def test_unmatched_element_has_zero_tokens():
+    events = _span_events("text that appears nowhere at all", "Q: hi there friend")
+    data = normalize.build_report_data(events)
+    (element,) = data["sessions"][0]["elements"]
+    assert element["tokens_est"] == 0
+
+
+def test_anthropic_usage_vocabulary_canonicalized():
+    event = _call_event(
+        "c1",
+        "2026-07-16T09:00:00+00:00",
+        [{"role": "user", "content": "hello there my friend"}],
+        "hi from claude model",
+    )
+    event["payload"]["provider"] = "anthropic"
+    event["payload"]["api"] = "messages"
+    event["payload"]["usage"] = {"input_tokens": 12, "output_tokens": 5}
+    data = normalize.build_report_data([event])
+    usage = data["sessions"][0]["calls"][0]["usage"]
+    assert usage["prompt_tokens"] == 12
+    assert usage["completion_tokens"] == 5
+    assert usage["total_tokens"] == 17
+    assert usage["input_tokens"] == 12  # original keys pass through
+
+
+def test_openai_usage_untouched():
+    events = _span_events("THE CHUNK TEXT", "Context:\nTHE CHUNK TEXT\nQ: hi")
+    data = normalize.build_report_data(events)
+    call = data["sessions"][0]["calls"][0]
+    assert call["usage"] is None or "input_tokens" not in (call["usage"] or {})
