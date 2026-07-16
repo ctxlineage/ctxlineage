@@ -86,3 +86,13 @@ def test_empty_or_tiny_units_are_ignored():
     out, matched = matching.apply_tags(segments, tags)
     assert matched == set()
     assert len(out) == 1 and out[0]["tagged"] is False
+
+
+def test_japanese_partial_match_splits_correctly():
+    chunk = "東京は日本の首都です。"
+    segments = [_seg("コンテキスト:\n" + chunk + "\n\n質問: 首都は?")]
+    tags = [_tag("rag_chunks", json.dumps([chunk], ensure_ascii=False), source="qdrant:jp")]
+    out, matched = matching.apply_tags(segments, tags)
+    assert matched == {"rag_chunks"}
+    tagged = next(s for s in out if s["tagged"])
+    assert tagged["content"] == chunk

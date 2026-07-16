@@ -33,4 +33,7 @@ def estimate_tokens(text: str, model: str) -> int:
             return len(encoding.encode(text, disallowed_special=()))
     except Exception:
         pass
-    return max(1, len(text) // 4)
+    # offline fallback: ~4 ASCII chars per token, but roughly 1 token per
+    # non-ASCII char (CJK etc.) — plain len//4 undercounts Japanese ~3x
+    ascii_chars = sum(1 for ch in text if ord(ch) < 128)
+    return max(1, ascii_chars // 4 + (len(text) - ascii_chars))

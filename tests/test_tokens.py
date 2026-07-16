@@ -32,3 +32,10 @@ def test_never_raises_when_tiktoken_blows_up(monkeypatch):
 
     monkeypatch.setattr(tokens, "_encoding_for", boom)
     assert tokens.estimate_tokens("some text here", "gpt-4o-mini") >= 1
+
+
+def test_cjk_fallback_not_grossly_underestimated(force_fallback):
+    japanese = "東京は日本の首都です。" * 10  # 110 chars
+    estimate = tokens.estimate_tokens(japanese, "gpt-4o-mini")
+    # real tokenizers put Japanese near 1 token/char; chars//4 (27) was ~2.6x low
+    assert estimate >= len(japanese) * 0.8

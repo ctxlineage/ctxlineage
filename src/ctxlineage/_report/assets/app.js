@@ -27,6 +27,12 @@ const segLabel = (g) => {
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) =>
   ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 const fmt = (n) => (n == null ? "–" : n.toLocaleString("en-US"));
+const clip = (t, n) => {
+  let s = String(t).slice(0, n);
+  const last = s.charCodeAt(s.length - 1);
+  if (last >= 0xd800 && last <= 0xdbff) s = s.slice(0, -1);  // no torn emoji
+  return s;
+};
 const stepOf = (c) => {
   if (c.step) return c.step;  // span name wins
   const frame = c.call_stack && c.call_stack[0];
@@ -226,7 +232,7 @@ function renderCallDetail() {
     <div class="seg ${ws ? "ws" : ""}" style="border-left-color:${kindColor(g.kind)}">
       <div class="top"><span class="kind" style="color:${kindColor(g.kind)}">${esc(segLabel(g))}</span>
         <span class="share">${fmt(g.tokens_est)} tok · ${(100 * g.tokens_est / total).toFixed(0)}%</span></div>
-      <div class="preview">${ws ? "(whitespace separator)" : esc(g.content.slice(0, 90))}</div>
+      <div class="preview">${ws ? "(whitespace separator)" : esc(clip(g.content, 90))}</div>
       <div class="full">${ws ? "(whitespace only — separates the surrounding segments)" : esc(g.content)}</div>
     </div>`;
   }).join("");
