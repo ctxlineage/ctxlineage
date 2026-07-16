@@ -49,6 +49,7 @@ let hiFrom = null;
 
 const calls = [];
 data.sessions.forEach((s, si) => s.calls.forEach((c) => calls.push({ s, si, c })));
+const callIndex = new Map(calls.map((x, i) => [x.c, i]));
 
 document.getElementById("stats").textContent =
   `${data.stats.calls} calls · ${data.stats.sessions} sessions · ${data.stats.errors} errors`;
@@ -186,7 +187,7 @@ function renderCallsNav() {
     h += `<h3>${esc(s.id)}</h3>`;
     s.calls.forEach((c) => {
       if (!callMatches(s, c)) return;
-      const i = calls.findIndex((x) => x.c === c);
+      const i = callIndex.get(c);
       const tok = c.usage ? fmt(c.usage.total_tokens) + " tok" : "–";
       h += `<div class="callrow ${i === selCall ? "sel" : ""}" data-i="${i}">
         <span class="n">${i + 1}</span>
