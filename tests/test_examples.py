@@ -102,3 +102,45 @@ def test_rag_no_key_prints_hint(tmp_path):
     assert proc.returncode == 2
     assert "--mock" in proc.stderr
     assert not (tmp_path / "events.jsonl").exists()
+
+
+@pytest.fixture(scope="module")
+def agent_events(tmp_path_factory):
+    out_dir = tmp_path_factory.mktemp("agent")
+    proc = _run_example("agent_app.py", out_dir, "--mock")
+    assert proc.returncode == 0, proc.stderr
+    return _load_events(out_dir)
+
+
+def test_agent_all_events_schema_valid(agent_events, validate_event):
+    for event in agent_events:
+        validate_event(event)
+
+
+def test_agent_tool_loop(agent_events):
+    calls = [e["payload"] for e in agent_events if e["event_type"] == "llm_call"]
+    assert len(calls) >= 4  # 2 user turns x (tool step + answer step)
+    assert all(c["request"].get("tools") for c in calls)
+    finish_reasons = {
+        c["response"]["choices"][0]["finish_reason"] for c in calls if c.get("response")
+    }
+    assert "tool_calls" in finish_reasons
+    tool_roles = [m for c in calls for m in c["request"]["messages"] if m.get("role") == "tool"]
+    assert tool_roles, "tool results must be fed back into a later call"
+
+
+def test_agent_spans_and_tool_tags(agent_events):
+    span_names = [e["payload"]["name"] for e in agent_events if e["event_type"] == "span_start"]
+    assert span_names == ["agent_turn"] * 2
+
+    tool_tags = [
+        e["payload"]
+        for e in agent_events
+        if e["event_type"] == "tag" and e["payload"]["name"] == "tool_result"
+    ]
+    assert tool_tags and all(t["source"] == "tool:search_notes" for t in tool_tags)
+
+    report = normalize.build_report_data(agent_events)
+    (session,) = report["sessions"]
+    matched = {el["name"] for el in session["elements"] if el["matched"]}
+    assert "tool_result" in matched
