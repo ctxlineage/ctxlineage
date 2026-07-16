@@ -4,38 +4,176 @@
   "title": "ctxlineage event (schema v1)",
   "description": "One event = one line in .ctxlineage/events.jsonl. The envelope is strict (additionalProperties: false); anything provider- or feature-specific lives inside payload, which is intentionally open.",
   "type": "object",
-  "required": ["schema_version", "event_type", "session_id", "timestamp", "payload"],
+  "required": [
+    "schema_version",
+    "event_type",
+    "session_id",
+    "timestamp",
+    "payload"
+  ],
   "additionalProperties": false,
   "properties": {
-    "schema_version": { "const": 1 },
-    "event_type": { "enum": ["llm_call", "tag", "span_start", "span_end"] },
-    "session_id": { "type": "string", "minLength": 1 },
-    "span_id": { "type": ["string", "null"] },
-    "call_id": { "type": ["string", "null"] },
-    "timestamp": { "type": "string", "format": "date-time" },
-    "payload": { "type": "object" }
+    "schema_version": {
+      "const": 1
+    },
+    "event_type": {
+      "enum": [
+        "llm_call",
+        "tag",
+        "span_start",
+        "span_end"
+      ]
+    },
+    "session_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "span_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "call_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "payload": {
+      "type": "object"
+    }
   },
   "allOf": [
     {
-      "if": { "properties": { "event_type": { "const": "llm_call" } } },
+      "if": {
+        "properties": {
+          "event_type": {
+            "const": "llm_call"
+          }
+        }
+      },
       "then": {
         "properties": {
-          "call_id": { "type": "string", "minLength": 1 },
+          "call_id": {
+            "type": "string",
+            "minLength": 1
+          },
           "payload": {
             "type": "object",
-            "required": ["provider", "api", "request"],
+            "required": [
+              "provider",
+              "api",
+              "request"
+            ],
             "additionalProperties": true,
             "properties": {
-              "provider": { "type": "string" },
-              "api": { "type": "string" },
-              "request": { "type": "object" },
-              "stream": { "type": "boolean" },
-              "duration_ms": { "type": "number" },
-              "call_stack": { "type": "array", "items": { "type": "string" } }
+              "provider": {
+                "type": "string"
+              },
+              "api": {
+                "type": "string"
+              },
+              "request": {
+                "type": "object"
+              },
+              "stream": {
+                "type": "boolean"
+              },
+              "duration_ms": {
+                "type": "number"
+              },
+              "call_stack": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "event_type": {
+            "const": "tag"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "span_id": {
+            "$ref": "#/$defs/requiredSpanId"
+          },
+          "payload": {
+            "type": "object",
+            "required": [
+              "name",
+              "content"
+            ],
+            "additionalProperties": true,
+            "properties": {
+              "name": {
+                "type": "string",
+                "minLength": 1
+              },
+              "content": {
+                "type": "string"
+              },
+              "source": {
+                "type": "string"
+              },
+              "transform": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "event_type": {
+            "enum": [
+              "span_start",
+              "span_end"
+            ]
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "span_id": {
+            "$ref": "#/$defs/requiredSpanId"
+          },
+          "payload": {
+            "type": "object",
+            "required": [
+              "name"
+            ],
+            "additionalProperties": true,
+            "properties": {
+              "name": {
+                "type": "string",
+                "minLength": 1
+              }
             }
           }
         }
       }
     }
-  ]
+  ],
+  "$defs": {
+    "requiredSpanId": {
+      "type": "string",
+      "minLength": 1
+    }
+  }
 }

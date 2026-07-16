@@ -13,7 +13,7 @@ import time
 
 import wrapt
 
-from ctxlineage import _events, _state
+from ctxlineage import _events, _span, _state
 from ctxlineage._stack import stack_summary
 
 _PATCHED = False
@@ -99,7 +99,8 @@ def _make_sync_wrapper(api: str):
             raise
         _finish_payload(payload, start)
         if payload["stream"]:
-            return _StreamProxy(result, payload, api)
+            # streams may be consumed after the span exits: bind the span now
+            return _StreamProxy(result, payload, api, _span.current_id())
         _record_response(payload, result)
         return result
 
@@ -119,7 +120,8 @@ def _make_async_wrapper(api: str):
             raise
         _finish_payload(payload, start)
         if payload["stream"]:
-            return _AsyncStreamProxy(result, payload, api)
+            # streams may be consumed after the span exits: bind the span now
+            return _AsyncStreamProxy(result, payload, api, _span.current_id())
         _record_response(payload, result)
         return result
 
@@ -129,9 +131,10 @@ def _make_async_wrapper(api: str):
 class _StreamRecorderMixin:
     """Shared chunk accounting; subclasses only differ in (a)sync plumbing."""
 
-    def _self_init(self, payload: dict, api: str) -> None:
+    def _self_init(self, payload: dict, api: str, span_id=None) -> None:
         self._self_payload = payload
         self._self_api = api
+        self._self_span_id = span_id
         self._self_chunks: list = []
         self._self_done = False
 
@@ -146,13 +149,13 @@ class _StreamRecorderMixin:
         assemble = _assemble_responses if self._self_api == "responses" else _assemble_chat
         payload["response"] = assemble(self._self_chunks)
         payload["usage"] = payload["response"].get("usage")
-        _state.emit("llm_call", payload, call_id=_events.new_id())
+        _state.emit("llm_call", payload, call_id=_events.new_id(), span_id=self._self_span_id)
 
 
 class _StreamProxy(wrapt.ObjectProxy, _StreamRecorderMixin):
-    def __init__(self, wrapped, payload: dict, api: str):
+    def __init__(self, wrapped, payload: dict, api: str, span_id=None):
         super().__init__(wrapped)
-        self._self_init(payload, api)
+        self._self_init(payload, api, span_id)
 
     def __iter__(self):
         try:
@@ -180,9 +183,9 @@ class _StreamProxy(wrapt.ObjectProxy, _StreamRecorderMixin):
 
 
 class _AsyncStreamProxy(wrapt.ObjectProxy, _StreamRecorderMixin):
-    def __init__(self, wrapped, payload: dict, api: str):
+    def __init__(self, wrapped, payload: dict, api: str, span_id=None):
         super().__init__(wrapped)
-        self._self_init(payload, api)
+        self._self_init(payload, api, span_id)
 
     async def __aiter__(self):
         try:

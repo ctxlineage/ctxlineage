@@ -38,13 +38,24 @@ def session_id() -> str | None:
     return _session_id
 
 
-def emit(
-    event_type: str, payload: dict, *, call_id: str | None = None, span_id: str | None = None
-) -> bool:
-    """Record one event. Returns False (never raises) when unconfigured or on failure."""
+_UNSET = object()
+
+
+def emit(event_type: str, payload: dict, *, call_id: str | None = None, span_id=_UNSET) -> bool:
+    """Record one event. Returns False (never raises) when unconfigured or on failure.
+
+    span_id defaults to the currently active span, so every recorder (including
+    future SDK patches) gets span attribution without threading it through.
+    Pass an explicit value to override, e.g. stream proxies that captured the
+    span at call time.
+    """
     global _warned
     if _writer is None or _session_id is None:
         return False
+    if span_id is _UNSET:
+        from ctxlineage import _span  # emit-time import avoids a module cycle
+
+        span_id = _span.current_id()
     try:
         _writer.write(
             make_event(event_type, _session_id, payload, span_id=span_id, call_id=call_id)
