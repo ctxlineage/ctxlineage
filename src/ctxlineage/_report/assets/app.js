@@ -26,7 +26,7 @@ const stepOf = (c) => {
 };
 
 /* ---------- state ---------- */
-let view = "calls";
+let view = "overview";
 let selCall = 0;
 let selSession = 0;
 let hiFrom = null;
@@ -61,6 +61,83 @@ document.querySelectorAll(".tab").forEach((t) =>
     hiFrom = null;
     render();
   }));
+
+/* ================= overview view (home) ================= */
+
+const callTok = (c) => (c.usage ? c.usage.total_tokens : c.input_tokens_est) ?? 0;
+const windowPct = (c) => {
+  if (!c.context_window) return null;
+  const used = c.usage ? c.usage.prompt_tokens : c.input_tokens_est;
+  return (100 * used) / c.context_window;
+};
+
+function renderOverviewNav() {
+  let h = "<h3>sessions</h3>";
+  data.sessions.forEach((s, i) => {
+    h += `<div class="sessrow" data-i="${i}">
+      <div class="id">${esc(s.id)}</div>
+      <div class="sub">${s.calls.length} calls</div></div>`;
+  });
+  const nav = document.getElementById("nav");
+  nav.innerHTML = h;
+  nav.querySelectorAll(".sessrow").forEach((el) =>
+    el.addEventListener("click", () => {
+      view = "chain"; selSession = +el.dataset.i; hiFrom = null; render();
+    }));
+}
+
+function renderOverview() {
+  const main = document.getElementById("main");
+  if (!calls.length) {
+    main.innerHTML = '<div class="empty">No LLM calls recorded yet.</div>';
+    return;
+  }
+  const totalTok = calls.reduce((a, x) => a + callTok(x.c), 0);
+  const promptTok = calls.reduce((a, x) => a + (x.c.usage ? x.c.usage.prompt_tokens : x.c.input_tokens_est ?? 0), 0);
+  const outTok = calls.reduce((a, x) => a + (x.c.usage ? x.c.usage.completion_tokens : 0), 0);
+
+  const heaviest = calls.map((x, i) => ({ ...x, i }))
+    .sort((a, b) => callTok(b.c) - callTok(a.c)).slice(0, 5);
+  const pressure = calls.map((x, i) => ({ ...x, i, pct: windowPct(x.c) }))
+    .filter((x) => x.pct !== null)
+    .sort((a, b) => b.pct - a.pct).slice(0, 3);
+
+  const stat = (num, cap, cls = "") =>
+    `<div class="statcard"><div class="num ${cls}">${num}</div><div class="cap">${cap}</div></div>`;
+  const topRow = (x, right) =>
+    `<div class="toprow" data-i="${x.i}">
+       <span class="rk">${heaviest.indexOf(x) >= 0 ? heaviest.indexOf(x) + 1 : ""}</span>
+       <span class="st">${esc(stepOf(x.c) ?? "llm call")}() · ${esc(x.c.model)}</span>
+       <span class="ss">${esc(x.s.id)}</span>${right}</div>`;
+
+  main.innerHTML = `<div class="ov">
+    <div class="cards">
+      ${stat(fmt(data.stats.calls), "llm calls")}
+      ${stat(fmt(data.stats.sessions), "sessions")}
+      ${stat(fmt(totalTok), "total tokens")}
+      ${stat(fmt(promptTok) + " / " + fmt(outTok), "input / output tok")}
+      ${stat(fmt(data.stats.errors), "errors", data.stats.errors ? "errn" : "")}
+    </div>
+    <h4>views</h4>
+    <div class="guides">
+      <div class="guide" data-view="calls"><b>Calls — call anatomy</b>
+        <p>Dissect one call: what filled the context window (user input, app
+        instructions, tool results, previous outputs) and at what token cost.</p></div>
+      <div class="guide" data-view="chain"><b>Chain — session flow</b>
+        <p>Follow a session: how each output becomes the next call's input —
+        loops, fan-out, and where context accumulates.</p></div>
+    </div>
+    <h4>heaviest calls (by tokens)</h4>
+    ${heaviest.map((x) => topRow(x, `<span class="tk">${fmt(callTok(x.c))} tok</span>`)).join("")}
+    ${pressure.length ? `<h4>window pressure (input vs model limit)</h4>
+      ${pressure.map((x) => topRow(x, `<span class="pressure"><span class="bar"><i style="width:${Math.min(x.pct, 100).toFixed(1)}%"></i></span></span><span class="tk">${x.pct.toFixed(1)}%</span>`)).join("")}` : ""}
+  </div>`;
+
+  main.querySelectorAll(".toprow").forEach((el) =>
+    el.addEventListener("click", () => { view = "calls"; selCall = +el.dataset.i; render(); }));
+  main.querySelectorAll(".guide").forEach((el) =>
+    el.addEventListener("click", () => { view = el.dataset.view; render(); }));
+}
 
 /* ================= calls view (anatomy) ================= */
 
@@ -215,7 +292,11 @@ function chainNodeHtml(c, i, targets, downstream) {
     cur.tok += g.tokens_est; cur.n += 1; agg.set(key, cur);
   });
   const total = c.segments.reduce((a, g) => a + g.tokens_est, 0) || 1;
-  const chips = [...agg.values()].map((a) =>
+  /* llm-out chip first: it is the lineage edge target, keep it on the top line
+     so incoming edges can always enter from the free gap above the row */
+  const entries = [...agg.values()].sort(
+    (a, b) => (a.kind === "assistant" ? 0 : 1) - (b.kind === "assistant" ? 0 : 1));
+  const chips = entries.map((a) =>
     `<span class="chip ${a.kind === "assistant" ? "fed" : ""}">
        <i style="background:${kindColor(a.kind)}"></i>${esc(a.label)}${a.n > 1 ? " ×" + a.n : ""} · ${fmt(a.tok)}</span>`).join("");
   const minibar = c.segments.map((g) =>
@@ -283,6 +364,22 @@ function renderChain() {
   requestAnimationFrame(drawEdges);
 }
 
+/* axis-aligned polyline with rounded corners */
+function orthPath(pts, r = 8) {
+  let d = `M ${pts[0][0]} ${pts[0][1]}`;
+  for (let k = 1; k < pts.length - 1; k++) {
+    const [px, py] = pts[k - 1], [cx, cy] = pts[k], [nx, ny] = pts[k + 1];
+    const inLen = Math.abs(cx - px) + Math.abs(cy - py);
+    const outLen = Math.abs(nx - cx) + Math.abs(ny - cy);
+    const rr = Math.min(r, inLen / 2, outLen / 2);
+    const ix = cx - Math.sign(cx - px) * rr, iy = cy - Math.sign(cy - py) * rr;
+    const ox = cx + Math.sign(nx - cx) * rr, oy = cy + Math.sign(ny - cy) * rr;
+    d += ` L ${ix} ${iy} Q ${cx} ${cy} ${ox} ${oy}`;
+  }
+  d += ` L ${pts[pts.length - 1][0]} ${pts[pts.length - 1][1]}`;
+  return d;
+}
+
 function drawEdges() {
   const svg = document.getElementById("edges");
   const wrap = document.getElementById("wrap");
@@ -303,7 +400,8 @@ function drawEdges() {
   const visible = hiFrom === null
     ? all.filter(([i, j]) => j === i + 1)
     : all.filter(([i]) => i === hiFrom);
-  const GUTTER = -34;
+  /* vertical channel inside the number gutter (nodes have 40px left padding) */
+  const GUTTER = 24;
   visible.forEach(([i, j]) => {
     const a = document.querySelector(`.node[data-n="${i}"] .outchip`);
     const bNode = document.querySelector(`.node[data-n="${j}"]`);
@@ -312,16 +410,22 @@ function drawEdges() {
     const ar = a.getBoundingClientRect(), br = b.getBoundingClientRect();
     const hi = hiFrom === i;
     const stroke = `stroke="${hi ? "var(--edge-hi)" : "var(--edge)"}"
-      stroke-width="${hi ? 2.5 : 2}" fill="none" marker-end="url(#${hi ? "arrhi" : "arr"})"`;
+      stroke-width="${hi ? 2.5 : 2}" fill="none" stroke-linejoin="round"
+      marker-end="url(#${hi ? "arrhi" : "arr"})"`;
     if (j === i + 1) {
+      /* subway hop through the row gap: down → left → down into the fed chip's top */
       const x1 = ar.left - wr.left + 18, y1 = ar.bottom - wr.top - 2;
-      const x2 = br.left + br.width / 2 - wr.left, y2 = br.top - wr.top - 2;
-      h += `<path d="M ${x1} ${y1} C ${x1} ${y1 + 30}, ${x2} ${y2 - 30}, ${x2} ${y2}" ${stroke}/>`;
+      const x2 = br.left + br.width / 2 - wr.left, y2 = br.top - wr.top - 3;
+      const gapY = (y1 + y2) / 2;
+      h += `<path d="${orthPath([[x1, y1], [x1, gapY], [x2, gapY], [x2, y2]])}" ${stroke}/>`;
     } else {
+      /* long hop: gutter lane down, then across the free gap ABOVE the target row,
+         entering the fed chip from the top (never crosses other chips) */
       const x1 = ar.left - wr.left + 18, y1 = ar.bottom - wr.top - 2;
-      const x2 = br.left - wr.left - 6, y2 = br.top + br.height / 2 - wr.top;
-      h += `<path d="M ${x1} ${y1} C ${x1} ${y1 + 44}, ${GUTTER} ${y1 + 30}, ${GUTTER} ${(y1 + y2) / 2}
-            C ${GUTTER} ${y2 - 6}, ${x2 - 40} ${y2}, ${x2} ${y2}" ${stroke}/>`;
+      const x2 = br.left + br.width / 2 - wr.left, y2 = br.top - wr.top - 3;
+      const gapY1 = y1 + 14;
+      const gapY2 = y2 - 12;
+      h += `<path d="${orthPath([[x1, y1], [x1, gapY1], [GUTTER, gapY1], [GUTTER, gapY2], [x2, gapY2], [x2, y2]])}" ${stroke}/>`;
     }
   });
   svg.innerHTML = h;
@@ -332,7 +436,8 @@ function render() {
   document.querySelectorAll(".tab").forEach((t) =>
     t.classList.toggle("sel", t.dataset.view === view));
   document.body.dataset.view = view;
-  if (view === "calls") { renderCallsNav(); renderCallDetail(); }
+  if (view === "overview") { renderOverviewNav(); renderOverview(); }
+  else if (view === "calls") { renderCallsNav(); renderCallDetail(); }
   else { renderChainNav(); renderChain(); }
 }
 

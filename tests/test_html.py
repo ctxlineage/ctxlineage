@@ -55,8 +55,9 @@ def test_render_is_self_contained_html():
     assert "__DATA__" not in out
 
 
-def test_render_contains_both_views_and_theme_toggle():
+def test_render_contains_all_views_and_theme_toggle():
     out = html.render(_data())
+    assert 'data-view="overview"' in out
     assert 'data-view="calls"' in out
     assert 'data-view="chain"' in out
     assert 'id="theme"' in out

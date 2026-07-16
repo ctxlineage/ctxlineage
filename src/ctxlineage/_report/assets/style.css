@@ -122,7 +122,7 @@ svg#edges { position: absolute; inset: 0; pointer-events: none; z-index: 2;
             width: 100%; height: 100%; overflow: visible; }
 .node { position: relative; z-index: 1; display: grid;
         grid-template-columns: minmax(250px, 1.1fr) minmax(190px, .8fr) minmax(230px, 1fr);
-        gap: 18px; align-items: center; padding: 10px 0 26px; }
+        gap: 18px; align-items: center; padding: 10px 0 26px 40px; }
 .chips { display: flex; flex-wrap: wrap; gap: 6px; justify-content: flex-end; }
 .chip { font-size: 11.5px; font-weight: 600; border-radius: 6px; padding: 3px 9px;
         border: 1px solid var(--border); background: var(--panel); }
@@ -147,7 +147,7 @@ svg#edges { position: absolute; inset: 0; pointer-events: none; z-index: 2;
 .outchip.hi { box-shadow: 0 0 0 2px var(--edge-hi); }
 .outchip .ds { color: var(--teal); font-weight: 700; }
 .node.hi-target .chips .chip.fed { box-shadow: 0 0 0 2px var(--edge-hi); }
-.nlabel { position: absolute; left: -26px; top: 50%; transform: translateY(-50%);
+.nlabel { position: absolute; left: 4px; top: 50%; transform: translateY(-50%);
           color: var(--muted); font-size: 11px; }
 .sesshead { font-size: 12px; color: var(--muted); margin: 0 0 18px; }
 .loopbox { border: 1.5px dashed color-mix(in srgb, var(--teal) 55%, transparent);
@@ -158,3 +158,33 @@ svg#edges { position: absolute; inset: 0; pointer-events: none; z-index: 2;
 .loophead .why { color: var(--muted); font-weight: 400; }
 .note { border: 1px dashed var(--border); color: var(--muted); border-radius: 8px;
         font-size: 12px; padding: 8px 12px; max-width: 1060px; margin-top: 6px; }
+
+/* overview view */
+.ov h4 { font-size: 11px; letter-spacing: .08em; text-transform: uppercase;
+         color: var(--muted); margin: 22px 0 8px; }
+.cards { display: flex; gap: 12px; flex-wrap: wrap; }
+.statcard { background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
+            padding: 12px 16px; min-width: 130px; }
+.statcard .num { font-size: 22px; font-weight: 700; }
+.statcard .num.errn { color: var(--err); }
+.statcard .cap { font-size: 11.5px; color: var(--muted); letter-spacing: .05em;
+                 text-transform: uppercase; }
+.guides { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; max-width: 760px; }
+.guide { background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
+         padding: 12px 16px; cursor: pointer; }
+.guide:hover { border-color: var(--teal); }
+.guide b { color: var(--teal); font-size: 14px; }
+.guide p { margin: 4px 0 0; font-size: 12.5px; color: var(--muted); }
+.toprow { display: flex; align-items: center; gap: 12px; background: var(--panel);
+          border: 1px solid var(--border); border-radius: 8px; padding: 8px 12px;
+          margin-bottom: 6px; cursor: pointer; max-width: 760px; }
+.toprow:hover { border-color: var(--teal); }
+.toprow .rk { color: var(--muted); font-size: 12px; width: 16px; }
+.toprow .st { font: 600 12.5px ui-monospace, monospace; flex: 1; min-width: 0;
+              white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.toprow .ss { color: var(--muted); font-size: 11.5px; }
+.toprow .tk { font-weight: 700; font-size: 12.5px; }
+.toprow .pressure { width: 130px; }
+.toprow .pressure .bar { height: 8px; border-radius: 4px; background: var(--track);
+                         overflow: hidden; }
+.toprow .pressure .bar i { display: block; height: 100%; background: var(--teal); }
