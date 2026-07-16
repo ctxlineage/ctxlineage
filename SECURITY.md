@@ -6,7 +6,7 @@ Pre-1.0: only the latest released version receives fixes.
 
 ## Reporting a vulnerability
 
-Please **do not open a public issue**. Email **me@masukai.dev** with details
+Please **do not open a public issue**. Email **ctxlineage@gmail.com** with details
 (affected version, reproduction, impact). You will get an acknowledgement
 within 48 hours and a fix or mitigation plan within 7 days for confirmed
 issues.
