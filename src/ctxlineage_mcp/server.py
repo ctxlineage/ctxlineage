@@ -169,9 +169,7 @@ def get_lineage(id: str) -> dict:
             "session_id": session["id"],
             "node": node,
             "elements_consumed": [
-                {"element_id": _element_id(e), **e}
-                for e in session["elements"]
-                if id in e["calls"]
+                {"element_id": _element_id(e), **e} for e in session["elements"] if id in e["calls"]
             ],
             "edges_in": edges_in,
             "edges_out": edges_out,

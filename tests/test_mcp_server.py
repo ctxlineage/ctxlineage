@@ -85,34 +85,50 @@ def _fixture_events():
     return [
         # s1: tagged span, c1's output flows into c2 (output_text + same_span)
         _span_start("sp1", "answer_query", "s1", "2026-07-16T09:00:00+00:00"),
-        _tag("sp1", "rag_chunks", "THE CHUNK TEXT ALPHA", "s1", "2026-07-16T09:00:01+00:00",
-             source="qdrant:x"),
-        _llm_call(
-            "c1", "2026-07-16T09:00:02+00:00",
-            [{"role": "user", "content": "Context:\nTHE CHUNK TEXT ALPHA\nQ: hi"}],
-            C1_ANSWER, span_id="sp1",
+        _tag(
+            "sp1",
+            "rag_chunks",
+            "THE CHUNK TEXT ALPHA",
+            "s1",
+            "2026-07-16T09:00:01+00:00",
+            source="qdrant:x",
         ),
         _llm_call(
-            "c2", "2026-07-16T09:05:00+00:00",
+            "c1",
+            "2026-07-16T09:00:02+00:00",
+            [{"role": "user", "content": "Context:\nTHE CHUNK TEXT ALPHA\nQ: hi"}],
+            C1_ANSWER,
+            span_id="sp1",
+        ),
+        _llm_call(
+            "c2",
+            "2026-07-16T09:05:00+00:00",
             [{"role": "user", "content": f"Previously: {C1_ANSWER}\n" + "x" * 900}],
-            "done and dusted okay!", span_id="sp1",
+            "done and dusted okay!",
+            span_id="sp1",
         ),
         # s2: second span reuses the tag name rag_chunks; one error call
         _span_start("sp2", "other_span", "s2", "2026-07-16T10:00:00+00:00"),
         _tag("sp2", "rag_chunks", "BETA CHUNK CONTENT", "s2", "2026-07-16T10:00:01+00:00"),
         _tag("sp2", "sysprompt", "You are terse.", "s2", "2026-07-16T10:00:02+00:00"),
         _llm_call(
-            "c3", "2026-07-16T10:00:03+00:00",
+            "c3",
+            "2026-07-16T10:00:03+00:00",
             [
                 {"role": "system", "content": "You are terse."},
                 {"role": "user", "content": "Context: BETA CHUNK CONTENT"},
             ],
-            "Sure thing, here you go.", session="s2", span_id="sp2",
+            "Sure thing, here you go.",
+            session="s2",
+            span_id="sp2",
         ),
         _llm_call(
-            "c4", "2026-07-16T10:05:00+00:00",
+            "c4",
+            "2026-07-16T10:05:00+00:00",
             [{"role": "user", "content": "hello?"}],
-            None, session="s2", error={"type": "APIError", "message": "boom"},
+            None,
+            session="s2",
+            error={"type": "APIError", "message": "boom"},
         ),
     ]
 
@@ -122,9 +138,7 @@ def events_dir(tmp_path):
     directory = tmp_path / ".ctxlineage"
     directory.mkdir()
     path = directory / "events.jsonl"
-    path.write_text(
-        "".join(json.dumps(e) + "\n" for e in _fixture_events()), encoding="utf-8"
-    )
+    path.write_text("".join(json.dumps(e) + "\n" for e in _fixture_events()), encoding="utf-8")
     server.configure(directory)
     return directory
 
@@ -237,9 +251,11 @@ def test_generate_report(events_dir, tmp_path):
 def test_reflects_appended_events(events_dir):
     assert len(server.list_sessions()["sessions"]) == 2
     new_call = _llm_call(
-        "c9", "2026-07-16T11:00:00+00:00",
+        "c9",
+        "2026-07-16T11:00:00+00:00",
         [{"role": "user", "content": "another session entirely"}],
-        "yes indeed it works", session="s3",
+        "yes indeed it works",
+        session="s3",
     )
     with (events_dir / "events.jsonl").open("a", encoding="utf-8") as fh:
         fh.write(json.dumps(new_call) + "\n")
