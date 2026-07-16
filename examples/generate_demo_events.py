@@ -76,7 +76,7 @@ class _Demo:
         event["timestamp"] = f"2026-06-12T09:{self.call_no:02d}:00+00:00"
         self.writer.write(event)
 
-    def chat(self, messages, answer, prompt_tokens, completion_tokens, **kwargs) -> None:
+    def chat(self, messages, answer, prompt_tokens, completion_tokens, stack=None, **kwargs):
         request = {"model": "gpt-4o-mini", "messages": messages, **kwargs}
         self.llm_call(
             {
@@ -85,7 +85,7 @@ class _Demo:
                 "request": request,
                 "stream": False,
                 "duration_ms": 420.0 + self.call_no * 130,
-                "call_stack": ["rag_app.py:answer_query:57", "rag_app.py:main:21"],
+                "call_stack": stack or ["rag_app.py:answer_query:57", "rag_app.py:main:21"],
                 "response": _chat_response(self.call_no, answer, prompt_tokens, completion_tokens),
                 "usage": _usage(prompt_tokens, completion_tokens),
             }
@@ -107,6 +107,7 @@ def _rag_turn(demo: _Demo, history: list, question: str, chunk_ids: list[int], a
         answer=f"search: {question.lower().rstrip('?')}",
         prompt_tokens=90 + 18 * len(history),
         completion_tokens=12,
+        stack=["rag_app.py:rewrite_query:43", "rag_app.py:handle_turn:21"],
         temperature=0.0,
     )
     context = "\n\n".join(CHUNKS[i] for i in chunk_ids)
@@ -119,6 +120,7 @@ def _rag_turn(demo: _Demo, history: list, question: str, chunk_ids: list[int], a
         answer=answer,
         prompt_tokens=240 + 95 * len(chunk_ids) + 30 * len(history),
         completion_tokens=15 + len(answer) // 4,
+        stack=["rag_app.py:answer_query:57", "rag_app.py:handle_turn:22"],
     )
     history += [
         {"role": "user", "content": question},
@@ -199,6 +201,80 @@ def generate(directory) -> None:
             "call_stack": ["changelog.py:summarize:41"],
             "error": {"type": "RateLimitError", "message": "Rate limit reached for gpt-4o-mini"},
         }
+    )
+
+    # Session 3: agent tool-call loop (search twice, then answer) — exercises
+    # role=tool segments and the repeated input→output chain the report shows.
+    demo3 = _Demo(writer, "demo-session-agent")
+    agent_system = (
+        "You are repo-bot. Use the search_docs tool to gather evidence before answering. "
+        "Loop until you have enough context."
+    )
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "search_docs",
+                "description": "Search the project documentation.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"query": {"type": "string"}},
+                    "required": ["query"],
+                },
+            },
+        }
+    ]
+    question = {"role": "user", "content": "Does ctxlineage need a database server?"}
+    call1_out = 'Calling search_docs("database server requirement")'
+    demo3.chat(
+        messages=[{"role": "system", "content": agent_system}, question],
+        answer=call1_out,
+        prompt_tokens=130,
+        completion_tokens=14,
+        stack=["agent.py:run_step:88", "agent.py:run:31"],
+        tools=tools,
+    )
+    tool_result_1 = {
+        "role": "tool",
+        "name": "search_docs",
+        "tool_call_id": "tc-1",
+        "content": CHUNKS[0] + "\n" + CHUNKS[2],
+    }
+    call2_out = 'Calling search_docs("report generation server")'
+    demo3.chat(
+        messages=[
+            {"role": "system", "content": agent_system},
+            question,
+            {"role": "assistant", "content": call1_out},
+            tool_result_1,
+        ],
+        answer=call2_out,
+        prompt_tokens=310,
+        completion_tokens=13,
+        stack=["agent.py:run_step:88", "agent.py:run:31"],
+        tools=tools,
+    )
+    tool_result_2 = {
+        "role": "tool",
+        "name": "search_docs",
+        "tool_call_id": "tc-2",
+        "content": CHUNKS[1],
+    }
+    demo3.chat(
+        messages=[
+            {"role": "system", "content": agent_system},
+            question,
+            {"role": "assistant", "content": call1_out},
+            tool_result_1,
+            {"role": "assistant", "content": call2_out},
+            tool_result_2,
+        ],
+        answer="No. Events are appended to a local JSONL file and the report is a single "
+        "self-contained HTML - no database or server is required [chunk-1][chunk-2].",
+        prompt_tokens=455,
+        completion_tokens=38,
+        stack=["agent.py:run_step:88", "agent.py:run:31"],
+        tools=tools,
     )
 
     print(f"wrote {writer.path}")

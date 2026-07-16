@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ctxlineage — mockup: call anatomy (detail view)</title>
+<style>
+  :root {
+    --ink: #252B33; --teal: #1FBFAE;
+    --bg: #f6f8fa; --panel: #ffffff; --text: #252B33; --muted: #6b7682;
+    --border: #dde3e9; --hover: #eef2f5; --active: #e2f5f3;
+    --sys: #1FBFAE; --user: #4A90D9; --assistant: #9B7EDE; --tool: #E8A33D;
+    --err: #d9534a; --track: #e8edf1;
+    --fn-bg: #252B33; --fn-border: #252B33; --fn-text: #e8ecf1; --fn-muted: #94a0ac;
+  }
+  [data-theme="dark"] {
+    --bg: #1b2026; --panel: #252B33; --text: #e8ecf1; --muted: #94a0ac;
+    --border: #39414b; --hover: #2d343d; --active: #1f3a38;
+    --track: #39414b;
+    --fn-bg: #2e3741; --fn-border: rgba(31,191,174,.45); --fn-text: #e8ecf1; --fn-muted: #94a0ac;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 14px/1.5 ui-sans-serif, system-ui, sans-serif;
+         background: var(--bg); color: var(--text); }
+  header { display: flex; align-items: center; gap: 12px; padding: 10px 20px;
+           background: var(--ink); color: #e8ecf1; }
+  header .name { font-weight: 700; font-size: 16px; }
+  header .name b { color: var(--teal); }
+  header .stats { color: #94a0ac; font-size: 12.5px; }
+  #theme { margin-left: auto; background: none; border: 1px solid #4a5460;
+           color: #e8ecf1; border-radius: 6px; padding: 4px 10px; cursor: pointer; }
+  .layout { display: grid; grid-template-columns: 280px 1fr; min-height: calc(100vh - 49px); }
+  nav { border-right: 1px solid var(--border); padding: 12px 0; overflow-y: auto; }
+  nav h3 { font-size: 11px; letter-spacing: .08em; text-transform: uppercase;
+           color: var(--muted); margin: 14px 16px 6px; }
+  .callrow { display: flex; align-items: center; gap: 8px; padding: 7px 16px;
+             cursor: pointer; border-left: 3px solid transparent; }
+  .callrow:hover { background: var(--hover); }
+  .callrow.sel { background: var(--active); border-left-color: var(--teal); }
+  .callrow .n { color: var(--muted); font-size: 12px; width: 18px; }
+  .callrow .m { flex: 1; min-width: 0; }
+  .callrow .m .model { font-size: 12.5px; font-weight: 600; }
+  .callrow .m .sub { font-size: 11.5px; color: var(--muted); }
+  .badge { font-size: 10.5px; border-radius: 4px; padding: 1px 6px; font-weight: 600; }
+  .badge.stream { background: color-mix(in srgb, var(--teal) 18%, transparent); color: var(--teal); }
+  .badge.err { background: color-mix(in srgb, var(--err) 15%, transparent); color: var(--err); }
+
+  main { padding: 20px 24px; overflow-y: auto; }
+  .callhead { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+  .callhead h2 { margin: 0; font-size: 16px; }
+  .callhead .meta { color: var(--muted); font-size: 12.5px; }
+  .windowbar { margin: 14px 0 22px; }
+  .windowbar .lbl { display: flex; justify-content: space-between;
+                    font-size: 12px; color: var(--muted); margin-bottom: 5px; }
+  .windowbar .bar { height: 14px; border-radius: 7px; background: var(--track);
+                    overflow: hidden; display: flex; }
+  .windowbar .bar i { display: block; height: 100%; }
+
+  .flow { display: grid;
+          grid-template-columns: minmax(260px, 1.15fr) 28px minmax(220px, .95fr) 28px minmax(220px, 1fr); }
+  .col h4 { font-size: 11px; letter-spacing: .08em; text-transform: uppercase;
+            color: var(--muted); margin: 0 0 8px; }
+  .arrow { align-self: center; text-align: center; color: var(--muted); font-size: 18px; }
+  .seg { background: var(--panel); border: 1px solid var(--border); border-left-width: 4px;
+         border-radius: 8px; padding: 8px 12px; margin-bottom: 8px; cursor: pointer; }
+  .seg .top { display: flex; justify-content: space-between; gap: 8px; }
+  .seg .kind { font-weight: 700; font-size: 12px; }
+  .seg .share { font-size: 11.5px; color: var(--muted); }
+  .seg .preview { color: var(--muted); font-size: 12px; white-space: nowrap; overflow: hidden;
+                  text-overflow: ellipsis; margin-top: 2px; }
+  .seg .full { display: none; margin-top: 8px; font: 12px/1.5 ui-monospace, monospace;
+               white-space: pre-wrap; word-break: break-word; max-height: 260px; overflow-y: auto;
+               border-top: 1px dashed var(--border); padding-top: 8px; }
+  .seg.open .full { display: block; } .seg.open .preview { display: none; }
+  .hint { font-size: 11.5px; color: var(--muted); margin-top: 4px; }
+
+  .fn { background: var(--fn-bg); color: var(--fn-text); border-radius: 10px;
+        padding: 14px 16px; border: 1px solid var(--fn-border); }
+  .fn .stepname { font: 700 13.5px ui-monospace, monospace; }
+  .fn .model { font-weight: 600; font-size: 12px; color: var(--teal); margin-top: 1px; }
+  .fn .row { display: flex; justify-content: space-between; font-size: 12px;
+             color: var(--fn-muted); margin-top: 6px; }
+  .fn .row span:last-child { color: var(--fn-text); }
+  .fn .instr { margin-top: 10px; border-top: 1px dashed rgba(148,160,172,.4); padding-top: 8px;
+               cursor: pointer; }
+  .fn .instr .lbl { font-size: 11px; letter-spacing: .06em; text-transform: uppercase;
+                    color: var(--teal); margin-bottom: 4px; display: flex;
+                    justify-content: space-between; }
+  .fn .instr .lbl span:last-child { color: var(--fn-muted); text-transform: none; }
+  .fn .instr .txt { font: 11.5px/1.5 ui-monospace, monospace; color: var(--fn-text);
+                    opacity: .85; max-height: 42px; overflow: hidden; white-space: pre-wrap; }
+  .fn .instr.open .txt { max-height: 300px; overflow-y: auto; }
+
+  .out { background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
+         padding: 10px 12px; border-left: 4px solid var(--assistant); }
+  .out.error { border-color: var(--err); border-left-color: var(--err); }
+  .out .head { display: flex; justify-content: space-between; font-size: 12px;
+               color: var(--muted); margin-bottom: 6px; }
+  .out .body { font-size: 12.5px; white-space: pre-wrap; word-break: break-word;
+               max-height: 300px; overflow-y: auto; }
+  .out.error .body { color: var(--err); font-weight: 600; }
+  .stackline { margin-top: 18px; font-size: 11.5px; color: var(--muted); }
+</style>
+</head>
+<body data-theme="light">
+<header>
+  <svg width="22" height="22" viewBox="0 0 256 256"><g fill="none" stroke="#E8ECF1" stroke-width="15" stroke-linecap="round"><path d="M44 80 C 106 80, 102 128, 150 128"/><path d="M44 176 C 106 176, 102 128, 150 128"/><path d="M150 128 H 172"/></g><circle cx="44" cy="80" r="12" fill="#E8ECF1"/><circle cx="44" cy="176" r="12" fill="#E8ECF1"/><circle cx="196" cy="128" r="21" fill="#1FBFAE"/></svg>
+  <span class="name">ctx<b>lineage</b></span>
+  <span class="stats" id="stats"></span>
+  <button id="theme">☾ dark</button>
+</header>
+<div class="layout">
+  <nav id="nav"></nav>
+  <main id="main"></main>
+</div>
+<script type="application/json" id="ctxlineage-data">__DATA__</script>
+<script>
+const data = JSON.parse(document.getElementById("ctxlineage-data").textContent);
+const KIND = { system: "--sys", user: "--user", assistant: "--assistant", tool: "--tool", tool_defs: "--tool" };
+const LABEL = { system: "app · instructions", user: "user input",
+                assistant: "llm output (prev)", tool: "tool / MCP", tool_defs: "tool definitions" };
+const css = (k) => `var(${KIND[k] ?? "--muted"})`;
+const label = (k, g) => k === "tool" && g?.name ? `tool / MCP · ${g.name}` : (LABEL[k] ?? k);
+const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) =>
+  ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const fmt = (n) => n == null ? "–" : n.toLocaleString("en-US");
+
+const saved = localStorage.getItem("ctxl-theme-b");
+let theme = saved ?? (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+const applyTheme = () => {
+  document.body.dataset.theme = theme;
+  document.getElementById("theme").textContent = theme === "dark" ? "☀ light" : "☾ dark";
+};
+document.getElementById("theme").onclick = () => {
+  theme = theme === "dark" ? "light" : "dark";
+  localStorage.setItem("ctxl-theme-b", theme); applyTheme();
+};
+applyTheme();
+
+document.getElementById("stats").textContent =
+  `${data.stats.calls} calls · ${data.stats.sessions} sessions · ${data.stats.errors} errors`;
+
+const calls = [];
+data.sessions.forEach((s) => s.calls.forEach((c) => calls.push({ s, c })));
+let selected = 0;
+
+function renderNav() {
+  let h = "";
+  data.sessions.forEach((s) => {
+    h += `<h3>${esc(s.id)}</h3>`;
+    s.calls.forEach((c) => {
+      const i = calls.findIndex((x) => x.c === c);
+      const tok = c.usage ? fmt(c.usage.total_tokens) + " tok" : "–";
+      h += `<div class="callrow ${i === selected ? "sel" : ""}" data-i="${i}">
+        <span class="n">${i + 1}</span>
+        <span class="m"><span class="model">${esc(c.model)}</span>
+          <div class="sub">${esc(c.timestamp.slice(11, 19))} · ${tok}</div></span>
+        ${c.stream ? '<span class="badge stream">stream</span>' : ""}
+        ${c.error ? '<span class="badge err">error</span>' : ""}</div>`;
+    });
+  });
+  const nav = document.getElementById("nav");
+  nav.innerHTML = h;
+  nav.querySelectorAll(".callrow").forEach((el) =>
+    el.addEventListener("click", () => { selected = +el.dataset.i; render(); }));
+}
+
+function renderMain() {
+  const { c } = calls[selected];
+  const total = c.segments.reduce((a, g) => a + g.tokens_est, 0) || 1;
+  const inTok = c.usage ? c.usage.prompt_tokens : c.input_tokens_est;
+  const pct = c.context_window ? (100 * inTok / c.context_window) : null;
+  const sys = c.segments.filter((g) => g.kind === "system");
+  const rest = c.segments.filter((g) => g.kind !== "system");
+
+  const winSegs = c.segments.map((g) =>
+    `<i style="width:${(100 * g.tokens_est / total).toFixed(2)}%;background:${css(g.kind)}"></i>`).join("");
+  const windowbar = `
+    <div class="windowbar">
+      <div class="lbl"><span>context window — input ${fmt(inTok)} tok${c.usage ? "" : " (est.)"}</span>
+        <span>${pct === null ? "window size unknown" : pct.toFixed(2) + "% of " + fmt(c.context_window)}</span></div>
+      <div class="bar">${pct !== null
+        ? `<i style="width:${Math.max(pct, 0.6)}%;display:flex;overflow:hidden">${winSegs}</i>` : winSegs}</div>
+    </div>`;
+
+  const segs = rest.map((g) => `
+    <div class="seg" style="border-left-color:${css(g.kind)}">
+      <div class="top"><span class="kind" style="color:${css(g.kind)}">${esc(label(g.kind, g))}</span>
+        <span class="share">${fmt(g.tokens_est)} tok · ${(100 * g.tokens_est / total).toFixed(0)}%</span></div>
+      <div class="preview">${esc(g.content.slice(0, 90))}</div>
+      <div class="full">${esc(g.content)}</div>
+    </div>`).join("");
+
+  const sysTok = sys.reduce((a, g) => a + g.tokens_est, 0);
+  const instr = sys.length ? `
+    <div class="instr" id="instr">
+      <div class="lbl"><span>instructions</span><span>${fmt(sysTok)} tok · ${(100 * sysTok / total).toFixed(0)}% of input</span></div>
+      <div class="txt">${esc(sys.map((g) => g.content).join("\n\n"))}</div>
+    </div>` : "";
+
+  const stepName = (c.call_stack?.[0] ?? "").split(":")[1] ?? null;
+  const fn = `
+    <div class="fn">
+      <div class="stepname">${esc(stepName ?? "llm call")}()</div>
+      <div class="model">${esc(c.model)}</div>
+      <div class="row"><span>api</span><span>${esc(c.api)}</span></div>
+      <div class="row"><span>duration</span><span>${c.duration_ms ? c.duration_ms.toFixed(0) + " ms" : "–"}</span></div>
+      <div class="row"><span>mode</span><span>${c.stream ? "streaming" : "sync"}</span></div>
+      ${c.usage ? `<div class="row"><span>usage</span><span>${fmt(c.usage.total_tokens)} tok</span></div>` : ""}
+      ${instr}
+    </div>`;
+
+  const out = c.error
+    ? `<div class="out error"><div class="head"><span>error</span><span>${esc(c.error.type)}</span></div>
+       <div class="body">${esc(c.error.message)}</div></div>`
+    : `<div class="out"><div class="head">
+         <span style="color:var(--assistant);font-weight:700">llm output</span>
+         <span>${c.usage ? fmt(c.usage.completion_tokens) + " tok · " : ""}${esc(c.output?.finish_reason ?? "")}</span></div>
+       <div class="body">${esc(c.output?.content ?? "")}</div></div>`;
+
+  document.getElementById("main").innerHTML = `
+    <div class="callhead"><h2>call ${selected + 1}</h2>
+      <span class="meta">${esc(c.id)} · ${esc(c.timestamp)}</span></div>
+    ${windowbar}
+    <div class="flow">
+      <div class="col"><h4>input — context</h4>${segs}
+        <div class="hint">user input may contain app-injected context — the span/tag API (M3) splits and attributes it</div></div>
+      <div class="arrow">→</div>
+      <div class="col"><h4>fn — step + model + instructions</h4>${fn}</div>
+      <div class="arrow">→</div>
+      <div class="col"><h4>output</h4>${out}</div>
+    </div>
+    ${c.call_stack.length ? `<div class="stackline">called from <code>${c.call_stack.map(esc).join(" ← ")}</code></div>` : ""}`;
+  document.querySelectorAll(".seg").forEach((el) =>
+    el.addEventListener("click", () => el.classList.toggle("open")));
+  const instrEl = document.getElementById("instr");
+  if (instrEl) instrEl.addEventListener("click", () => instrEl.classList.toggle("open"));
+}
+
+function render() { renderNav(); renderMain(); }
+render();
+</script>
+</body>
+</html>

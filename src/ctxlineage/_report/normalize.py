@@ -81,7 +81,10 @@ def _chat_segments(request: dict) -> list[dict]:
             continue
         role = message.get("role", "user")
         text = _content_to_text(message.get("content"))
-        segments.append({"role": role, "kind": role, "content": text})
+        segment = {"role": role, "kind": role, "content": text}
+        if role == "tool" and message.get("name"):
+            segment["name"] = message["name"]
+        segments.append(segment)
     return segments
 
 
@@ -148,6 +151,17 @@ def _normalize_call(event: dict) -> dict:
     else:
         segments = _chat_segments(request)
         output = None if "error" in payload else _chat_output(payload.get("response"))
+    tools = request.get("tools")
+    if tools:
+        # Tool/function definitions are serialized into the prompt and consume
+        # window tokens — surface them as their own segment so they are not invisible.
+        segments.append(
+            {
+                "role": "tool_defs",
+                "kind": "tool_defs",
+                "content": json.dumps(tools, ensure_ascii=False, indent=1),
+            }
+        )
     for index, segment in enumerate(segments):
         segment["index"] = index
         segment["tokens_est"] = estimate_tokens(segment["content"], model or "")

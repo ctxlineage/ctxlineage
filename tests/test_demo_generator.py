@@ -22,8 +22,8 @@ def test_all_events_schema_valid(demo_events, validate_event):
         validate_event(event)
 
 
-def test_contains_two_sessions(demo_events):
-    assert len({e["session_id"] for e in demo_events}) == 2
+def test_contains_three_sessions(demo_events):
+    assert len({e["session_id"] for e in demo_events}) == 3
 
 
 def test_contains_streamed_and_error_calls(demo_events):
