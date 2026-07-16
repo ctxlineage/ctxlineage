@@ -232,7 +232,7 @@ def _session_edges(calls: list[dict]) -> tuple[list[dict], bool]:
         if call.get("span_id") and call.get("id"):
             by_span.setdefault(call["span_id"], []).append(call["id"])
     for ids in by_span.values():
-        for a, b in zip(ids, ids[1:]):
+        for a, b in zip(ids, ids[1:], strict=False):
             if a != b:
                 edges.append({"from": a, "to": b, "kind": "same_span"})
     return edges, truncated
