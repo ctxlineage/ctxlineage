@@ -57,7 +57,7 @@ context elements are typed inputs with provenance, outputs flow into
 downstream inputs.
 
 <p align="center">
-  <img src="docs/assets/report-graph.png" alt="Lineage graph — sources, context elements, calls; click to trace impact" width="800">
+  <img src="docs/assets/report-tour.gif" alt="Ten-second tour: Overview, call anatomy, session chain, lineage graph with click-to-trace, dark mode" width="800">
 </p>
 
 ## Tagging (optional, unlocks lineage)
