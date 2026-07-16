@@ -40,4 +40,13 @@ jobs:
             uv sync
           fi
       - name: Run tests
-        run: uv run pytest -v --cov=ctxlineage --cov-report=term-missing
+        run: uv run pytest -v --cov=ctxlineage --cov-report=term-missing --cov-report=xml
+      # Coverage upload only once per matrix (drt pattern); tokenless upload
+      # works after the Codecov app is installed on the org (#12) — until then
+      # this step is allowed to fail.
+      - name: Upload coverage
+        if: matrix.python-version == '3.13'
+        uses: codecov/codecov-action@v5
+        continue-on-error: true
+        with:
+          files: coverage.xml

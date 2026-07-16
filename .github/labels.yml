@@ -1,0 +1,37 @@
+# Source of truth for repo labels (synced by .github/workflows/sync-labels.yml)
+- name: bug
+  color: d73a4a
+  description: Something is broken
+- name: enhancement
+  color: a2eeef
+  description: Feature or improvement
+- name: documentation
+  color: 0075ca
+  description: Docs only
+- name: dependencies
+  color: 0366d6
+  description: Dependency updates
+- name: good first issue
+  color: 7057ff
+  description: Small, well-scoped, newcomer-friendly
+- name: help wanted
+  color: 008672
+  description: Community contribution welcome
+- name: wontfix
+  color: ffffff
+  description: Out of scope / off-roadmap
+- name: duplicate
+  color: cfd3d7
+  description: Already tracked elsewhere
+- name: milestone
+  color: 1FBFAE
+  description: v1 milestone tracking issue
+- name: human-action
+  color: D93F0B
+  description: Requires the maintainer (accounts, uploads, announcements)
+- name: backlog
+  color: C5DEF5
+  description: Post-v1 ideas, not scheduled
+- name: discussion
+  color: 8250DF
+  description: Discussion topic for a dedicated session with the maintainer
