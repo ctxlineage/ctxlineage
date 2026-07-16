@@ -57,6 +57,23 @@ async def test_async_create_stream_assembles_content(
 
 
 @respx.mock
+async def test_async_mid_stream_error_recorded_and_reraised(
+    capture, async_client, messages_error_stream_body
+):
+    respx.post(MESSAGES_URL).mock(
+        return_value=httpx.Response(200, headers=SSE_HEADERS, content=messages_error_stream_body)
+    )
+    stream = await async_client.messages.create(
+        model="claude-sonnet-5", max_tokens=64, messages=MESSAGES, stream=True
+    )
+    with pytest.raises(anthropic.APIStatusError):
+        _ = [c async for c in stream]
+    (event,) = capture()
+    assert "error" in event["payload"]
+    assert event["payload"]["response"]["content"]["0"] == "Hello"
+
+
+@respx.mock
 async def test_builtin_anext_works_and_records(capture, async_client, messages_stream_body):
     respx.post(MESSAGES_URL).mock(
         return_value=httpx.Response(200, headers=SSE_HEADERS, content=messages_stream_body)

@@ -174,6 +174,42 @@ def messages_stream_body():
 
 
 @pytest.fixture
+def chat_error_stream_body():
+    """One good chunk, then an in-band error frame the SDK raises on."""
+    return _sse(
+        _chat_chunk(delta={"role": "assistant", "content": "Hello"}),
+        {"error": {"message": "server overloaded"}},
+    )
+
+
+@pytest.fixture
+def messages_error_stream_body():
+    """Partial text, then an in-band `event: error` frame (raises mid-stream)."""
+    return _anthropic_sse(
+        {
+            "type": "message_start",
+            "message": {
+                "id": "msg_test1",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-sonnet-5",
+                "content": [],
+                "stop_reason": None,
+                "stop_sequence": None,
+                "usage": {"input_tokens": 9, "output_tokens": 1},
+            },
+        },
+        {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
+        {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {"type": "text_delta", "text": "Hello"},
+        },
+        {"type": "error", "error": {"type": "overloaded_error", "message": "Overloaded"}},
+    )
+
+
+@pytest.fixture
 def anthropic_client():
     import anthropic
 

@@ -64,6 +64,13 @@ class StreamRecorderMixin:
     def _self_add(self, chunk) -> None:
         self._self_chunks.append(dump(chunk))
 
+    def _self_record_error(self, exc: BaseException) -> None:
+        # mid-stream failure (in-band SSE error, network drop): keep the
+        # partial assembly but mark the event so it is distinguishable from
+        # a client-side abandon. GeneratorExit is excluded at the call sites.
+        if not self._self_done:
+            self._self_payload["error"] = {"type": type(exc).__name__, "message": str(exc)}
+
     def _self_finish(self) -> None:
         if self._self_done:
             return
@@ -93,6 +100,9 @@ class StreamProxy(wrapt.ObjectProxy, StreamRecorderMixin):
             for chunk in self.__wrapped__:
                 self._self_add(chunk)
                 yield chunk
+        except Exception as exc:  # not GeneratorExit: abandonment is not an error
+            self._self_record_error(exc)
+            raise
         finally:
             self._self_finish()
 
@@ -100,6 +110,10 @@ class StreamProxy(wrapt.ObjectProxy, StreamRecorderMixin):
         try:
             chunk = self.__wrapped__.__next__()
         except StopIteration:
+            self._self_finish()
+            raise
+        except Exception as exc:
+            self._self_record_error(exc)
             self._self_finish()
             raise
         self._self_add(chunk)
@@ -134,6 +148,9 @@ class AsyncStreamProxy(wrapt.ObjectProxy, StreamRecorderMixin):
             async for chunk in self.__wrapped__:
                 self._self_add(chunk)
                 yield chunk
+        except Exception as exc:  # not GeneratorExit: abandonment is not an error
+            self._self_record_error(exc)
+            raise
         finally:
             self._self_finish()
 
@@ -141,6 +158,10 @@ class AsyncStreamProxy(wrapt.ObjectProxy, StreamRecorderMixin):
         try:
             chunk = await self.__wrapped__.__anext__()
         except StopAsyncIteration:
+            self._self_finish()
+            raise
+        except Exception as exc:
+            self._self_record_error(exc)
             self._self_finish()
             raise
         self._self_add(chunk)

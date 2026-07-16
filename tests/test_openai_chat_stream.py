@@ -1,4 +1,6 @@
 import httpx
+import openai
+import pytest
 import respx
 
 CHAT_URL = "https://api.openai.com/v1/chat/completions"
@@ -62,6 +64,21 @@ def test_context_manager_records_once(capture, openai_client, chat_stream_body):
         for _chunk in stream:
             pass
     assert len(capture()) == 1
+
+
+@respx.mock
+def test_mid_stream_error_recorded_and_reraised(capture, openai_client, chat_error_stream_body):
+    _mock_stream(chat_error_stream_body)
+    stream = openai_client.chat.completions.create(
+        model="gpt-4o-mini", messages=MESSAGES, stream=True
+    )
+    with pytest.raises(openai.APIError):
+        list(stream)
+    stream.close()  # a defensive close after the error must not emit twice
+    (event,) = capture()
+    payload = event["payload"]
+    assert payload["error"]["type"] == "APIError"
+    assert payload["response"]["content"]["0"] == "Hello"  # partial kept alongside error
 
 
 @respx.mock

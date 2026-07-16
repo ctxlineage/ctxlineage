@@ -1,4 +1,6 @@
+import anthropic
 import httpx
+import pytest
 import respx
 
 MESSAGES_URL = "https://api.anthropic.com/v1/messages"
@@ -109,6 +111,35 @@ def test_stream_helper_never_entered_records_nothing(
     manager = _stream_manager(anthropic_client)
     del manager  # no __enter__, no HTTP request, nothing to record
     assert capture() == []
+
+
+@respx.mock
+def test_mid_stream_error_recorded_and_reraised(
+    capture, anthropic_client, messages_error_stream_body
+):
+    _mock_stream(messages_error_stream_body)
+    stream = _create_stream(anthropic_client)
+    with pytest.raises(anthropic.APIStatusError):
+        list(stream)
+    stream.close()  # a defensive close after the error must not emit twice
+    (event,) = capture()
+    payload = event["payload"]
+    assert "error" in payload
+    assert payload["response"]["content"]["0"] == "Hello"  # partial kept alongside error
+
+
+@respx.mock
+def test_stream_helper_mid_stream_error_recorded(
+    capture, anthropic_client, messages_error_stream_body
+):
+    _mock_stream(messages_error_stream_body)
+    with pytest.raises(anthropic.APIStatusError):
+        with _stream_manager(anthropic_client) as stream:
+            for _text in stream.text_stream:
+                pass
+    (event,) = capture()
+    assert "error" in event["payload"]
+    assert event["payload"]["response"]["content"]["0"] == "Hello"
 
 
 @respx.mock
