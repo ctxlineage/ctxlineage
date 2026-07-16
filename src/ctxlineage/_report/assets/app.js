@@ -219,13 +219,16 @@ function renderCallDetail() {
         ? `<i style="width:${Math.max(pct, 0.6)}%;display:flex;overflow:hidden">${winSegs}</i>` : winSegs}</div>
     </div>`;
 
-  const segs = rest.map((g) => `
-    <div class="seg" style="border-left-color:${kindColor(g.kind)}">
+  const segs = rest.map((g) => {
+    const ws = !g.content.trim();
+    return `
+    <div class="seg ${ws ? "ws" : ""}" style="border-left-color:${kindColor(g.kind)}">
       <div class="top"><span class="kind" style="color:${kindColor(g.kind)}">${esc(segLabel(g))}</span>
         <span class="share">${fmt(g.tokens_est)} tok · ${(100 * g.tokens_est / total).toFixed(0)}%</span></div>
-      <div class="preview">${esc(g.content.slice(0, 90))}</div>
-      <div class="full">${esc(g.content)}</div>
-    </div>`).join("");
+      <div class="preview">${ws ? "(whitespace separator)" : esc(g.content.slice(0, 90))}</div>
+      <div class="full">${ws ? "(whitespace only — separates the surrounding segments)" : esc(g.content)}</div>
+    </div>`;
+  }).join("");
 
   const sysTok = sys.reduce((a, g) => a + g.tokens_est, 0);
   const instr = sys.length ? `
