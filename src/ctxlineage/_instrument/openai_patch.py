@@ -1,10 +1,7 @@
 """openai SDK instrumentation (Chat Completions + Responses API).
 
-Design constraints:
-- The patch layer stays thin: record kwargs wholesale, dump responses with
-  model_dump, pass unknown fields through untouched.
-- Recording must never break the host call: wrappers no-op when ctxlineage is
-  unconfigured, and _state.emit() already swallows write failures.
+Shared design constraints live in _common.py; this module only knows the
+openai patch targets and how to reduce its stream chunks.
 """
 
 from __future__ import annotations
@@ -13,8 +10,15 @@ import time
 
 import wrapt
 
-from ctxlineage import _events, _span, _state
-from ctxlineage._stack import stack_summary
+from ctxlineage import _span, _state
+from ctxlineage._instrument._common import (
+    AsyncStreamProxy,
+    StreamProxy,
+    base_payload,
+    finish_payload,
+    record_error,
+    record_response,
+)
 
 _PATCHED = False
 
@@ -52,56 +56,26 @@ def install() -> bool:
     return True
 
 
-def _base_payload(api: str, kwargs: dict) -> dict:
-    return {
-        "provider": "openai",
-        "api": api,
-        "request": dict(kwargs),
-        "stream": bool(kwargs.get("stream")),
-        "call_stack": stack_summary(),
-    }
-
-
-def _dump(obj):
-    try:
-        return obj.model_dump(mode="json")
-    except Exception:
-        return str(obj)
-
-
-def _finish_payload(payload: dict, start: float) -> dict:
-    payload["duration_ms"] = (time.monotonic() - start) * 1000
-    return payload
-
-
-def _record_response(payload: dict, result) -> None:
-    data = _dump(result)
-    payload["response"] = data
-    payload["usage"] = data.get("usage") if isinstance(data, dict) else None
-    _state.emit("llm_call", payload, call_id=_events.new_id())
-
-
-def _record_error(payload: dict, exc: BaseException) -> None:
-    payload["error"] = {"type": type(exc).__name__, "message": str(exc)}
-    _state.emit("llm_call", payload, call_id=_events.new_id())
+def _assembler_for(api: str):
+    return _assemble_responses if api == "responses" else _assemble_chat
 
 
 def _make_sync_wrapper(api: str):
     def wrapper(wrapped, instance, args, kwargs):
         if not _state.is_configured():
             return wrapped(*args, **kwargs)
-        payload = _base_payload(api, kwargs)
+        payload = base_payload("openai", api, kwargs)
         start = time.monotonic()
         try:
             result = wrapped(*args, **kwargs)
         except Exception as exc:
-            _record_error(_finish_payload(payload, start), exc)
+            record_error(finish_payload(payload, start), exc)
             raise
-        _finish_payload(payload, start)
+        finish_payload(payload, start)
         if payload["stream"]:
             # streams may be consumed after the span exits: bind the span now
-            return _StreamProxy(result, payload, api, _span.current_id())
-        _record_response(payload, result)
+            return StreamProxy(result, payload, _assembler_for(api), _span.current_id())
+        record_response(payload, result)
         return result
 
     return wrapper
@@ -111,105 +85,21 @@ def _make_async_wrapper(api: str):
     async def wrapper(wrapped, instance, args, kwargs):
         if not _state.is_configured():
             return await wrapped(*args, **kwargs)
-        payload = _base_payload(api, kwargs)
+        payload = base_payload("openai", api, kwargs)
         start = time.monotonic()
         try:
             result = await wrapped(*args, **kwargs)
         except Exception as exc:
-            _record_error(_finish_payload(payload, start), exc)
+            record_error(finish_payload(payload, start), exc)
             raise
-        _finish_payload(payload, start)
+        finish_payload(payload, start)
         if payload["stream"]:
             # streams may be consumed after the span exits: bind the span now
-            return _AsyncStreamProxy(result, payload, api, _span.current_id())
-        _record_response(payload, result)
+            return AsyncStreamProxy(result, payload, _assembler_for(api), _span.current_id())
+        record_response(payload, result)
         return result
 
     return wrapper
-
-
-class _StreamRecorderMixin:
-    """Shared chunk accounting; subclasses only differ in (a)sync plumbing."""
-
-    def _self_init(self, payload: dict, api: str, span_id=None) -> None:
-        self._self_payload = payload
-        self._self_api = api
-        self._self_span_id = span_id
-        self._self_chunks: list = []
-        self._self_done = False
-
-    def _self_add(self, chunk) -> None:
-        self._self_chunks.append(_dump(chunk))
-
-    def _self_finish(self) -> None:
-        if self._self_done:
-            return
-        self._self_done = True
-        payload = self._self_payload
-        assemble = _assemble_responses if self._self_api == "responses" else _assemble_chat
-        payload["response"] = assemble(self._self_chunks)
-        payload["usage"] = payload["response"].get("usage")
-        _state.emit("llm_call", payload, call_id=_events.new_id(), span_id=self._self_span_id)
-
-
-class _StreamProxy(wrapt.ObjectProxy, _StreamRecorderMixin):
-    def __init__(self, wrapped, payload: dict, api: str, span_id=None):
-        super().__init__(wrapped)
-        self._self_init(payload, api, span_id)
-
-    def __iter__(self):
-        try:
-            for chunk in self.__wrapped__:
-                self._self_add(chunk)
-                yield chunk
-        finally:
-            self._self_finish()
-
-    def __enter__(self):
-        self.__wrapped__.__enter__()
-        return self
-
-    def __exit__(self, *exc):
-        try:
-            return self.__wrapped__.__exit__(*exc)
-        finally:
-            self._self_finish()
-
-    def close(self):
-        try:
-            return self.__wrapped__.close()
-        finally:
-            self._self_finish()
-
-
-class _AsyncStreamProxy(wrapt.ObjectProxy, _StreamRecorderMixin):
-    def __init__(self, wrapped, payload: dict, api: str, span_id=None):
-        super().__init__(wrapped)
-        self._self_init(payload, api, span_id)
-
-    async def __aiter__(self):
-        try:
-            async for chunk in self.__wrapped__:
-                self._self_add(chunk)
-                yield chunk
-        finally:
-            self._self_finish()
-
-    async def __aenter__(self):
-        await self.__wrapped__.__aenter__()
-        return self
-
-    async def __aexit__(self, *exc):
-        try:
-            return await self.__wrapped__.__aexit__(*exc)
-        finally:
-            self._self_finish()
-
-    async def close(self):
-        try:
-            return await self.__wrapped__.close()
-        finally:
-            self._self_finish()
 
 
 def _assemble_responses(chunks: list) -> dict:

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from ctxlineage._instrument import openai_patch
+from ctxlineage._instrument import anthropic_patch, openai_patch
 
 _installed_providers: list[str] | None = None
 
@@ -15,5 +15,7 @@ def install() -> list[str]:
     providers = []
     if openai_patch.install():
         providers.append("openai")
+    if anthropic_patch.install():
+        providers.append("anthropic")
     _installed_providers = providers
     return providers

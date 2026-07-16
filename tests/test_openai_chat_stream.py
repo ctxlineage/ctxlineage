@@ -1,4 +1,6 @@
 import httpx
+import openai
+import pytest
 import respx
 
 CHAT_URL = "https://api.openai.com/v1/chat/completions"
@@ -62,3 +64,33 @@ def test_context_manager_records_once(capture, openai_client, chat_stream_body):
         for _chunk in stream:
             pass
     assert len(capture()) == 1
+
+
+@respx.mock
+def test_mid_stream_error_recorded_and_reraised(capture, openai_client, chat_error_stream_body):
+    _mock_stream(chat_error_stream_body)
+    stream = openai_client.chat.completions.create(
+        model="gpt-4o-mini", messages=MESSAGES, stream=True
+    )
+    with pytest.raises(openai.APIError):
+        list(stream)
+    stream.close()  # a defensive close after the error must not emit twice
+    (event,) = capture()
+    payload = event["payload"]
+    assert payload["error"]["type"] == "APIError"
+    assert payload["response"]["content"]["0"] == "Hello"  # partial kept alongside error
+
+
+@respx.mock
+def test_builtin_next_works_and_records(capture, openai_client, chat_stream_body):
+    _mock_stream(chat_stream_body)
+    stream = openai_client.chat.completions.create(
+        model="gpt-4o-mini", messages=MESSAGES, stream=True
+    )
+    first = next(stream)  # builtin next() on the proxy itself, not iter(stream)
+    assert first.choices[0].delta.content == "Hello"
+    rest = [c for c in stream]  # mixed consumption continues where next() left off
+    assert len(rest) == 3
+    (event,) = capture()
+    assert event["payload"]["response"]["content"]["0"] == "Hello world"
+    assert event["payload"]["response"]["chunk_count"] == 4

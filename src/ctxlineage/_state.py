@@ -9,7 +9,15 @@ from ctxlineage._events import EventWriter, make_event, new_id
 
 _writer: EventWriter | None = None
 _session_id: str | None = None
-_warned = False
+_warned_keys: set[str] = set()
+
+
+def warn_once(key: str, message: str) -> None:
+    """Warn once per key per process; recording problems must never spam or raise."""
+    if key in _warned_keys:
+        return
+    _warned_keys.add(key)
+    warnings.warn(message, RuntimeWarning, stacklevel=3)
 
 
 def init(directory: str | os.PathLike | None = None) -> None:
@@ -49,7 +57,6 @@ def emit(event_type: str, payload: dict, *, call_id: str | None = None, span_id=
     Pass an explicit value to override, e.g. stream proxies that captured the
     span at call time.
     """
-    global _warned
     if _writer is None or _session_id is None:
         return False
     if span_id is _UNSET:
@@ -62,19 +69,16 @@ def emit(event_type: str, payload: dict, *, call_id: str | None = None, span_id=
         )
         return True
     except Exception as exc:
-        if not _warned:
-            _warned = True
-            warnings.warn(
-                f"ctxlineage: failed to record event ({exc!r}); further failures will be silent",
-                RuntimeWarning,
-                stacklevel=2,
-            )
+        warn_once(
+            "emit",
+            f"ctxlineage: failed to record event ({exc!r}); further failures will be silent",
+        )
         return False
 
 
 def _reset() -> None:
     """Test helper: forget writer/session. Cannot un-patch SDKs."""
-    global _writer, _session_id, _warned
+    global _writer, _session_id
     _writer = None
     _session_id = None
-    _warned = False
+    _warned_keys.clear()
