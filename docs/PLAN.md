@@ -121,7 +121,7 @@ The HTML has two views:
 
 **Event schema (JSONL, language-agnostic):** `event_type` (llm_call / tag / span_start / span_end), `session_id`, `span_id`, `call_id`, `timestamp`, `payload`. The schema is versioned as JSON Schema under `schema/` (the foundation for future multi-language SDKs and external tool integration).
 
-**Frontend:** a single prebuilt bundle shipped inside the Python package (React + lightweight graph rendering; d3 or hand-rolled SVG is fine. No external CDN references). The Python side only "injects JSON into a template HTML" — users never build the frontend.
+**Frontend (decided 2026-07-16, supersedes the original React plan):** server-rendered by Python. A deterministic layout engine emits the lineage graph as static inline SVG; the page ships hand-written CSS (single `:root` token block, light + dark both mandatory — default follows `prefers-color-scheme` with a persisted toggle) and a small vanilla-JS layer for interactivity (segment expansion, downstream highlighting, theme toggle). SVG colors reference CSS custom properties so the graph re-themes for free. No external CDN references, no node toolchain, no build step. Reference implementation: drt-hub/drt `drt docs` (deterministic layout, reserved-gutter edge routing); agreed visual direction: `docs/design/m2-mockups/`.
 
 **Sensitive data:** reports contain full prompts. Provide at minimum `ctxlineage report --redact "pattern"` and field-level masking via init options. State clearly in the README: "be careful with sensitive data when sharing reports".
 
@@ -129,7 +129,7 @@ The HTML has two views:
 
 - Python 3.10+ / minimal dependencies (`wrapt` for patching, `tiktoken` for token estimation — prefer actual usage values for anthropic, `click` or `typer` for CLI)
 - MCP: official `mcp` Python SDK (FastMCP)
-- Frontend: TypeScript + React + Vite (only build artifacts are bundled)
+- Frontend: server-rendered HTML/SVG from Python; hand-written vanilla JS + CSS shipped as package resources (no node toolchain — decided 2026-07-16, supersedes TS+React+Vite)
 - Tests: pytest. SDK patches verified against mocked HTTP (respx etc.). TDD.
 - Packaging: `uv` / `hatchling`, PyPI publication assumed
 - License: **Apache-2.0 (final).** Contributions via DCO (Developer Certificate of Origin); copyright unified under the org to keep IP clean. No copy-pasting external code (take it as a dependency instead).
@@ -140,7 +140,6 @@ The HTML has two views:
 ctxlineage/
 ├── src/ctxlineage/          # capture, report builder, CLI
 ├── src/ctxlineage_mcp/      # MCP server
-├── frontend/                # report UI (build artifacts → src/ctxlineage/static/)
 ├── assets/                  # logo & brand assets (logo.svg / logo-dark.svg / avatar.svg / wordmark.svg)
 ├── schema/                  # event JSON Schema
 ├── skills/ctxlineage-instrument/SKILL.md
