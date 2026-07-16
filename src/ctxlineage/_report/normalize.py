@@ -255,6 +255,16 @@ def _session_edges(calls: list[dict]) -> tuple[list[dict], bool]:
     return edges, truncated
 
 
+def _element_tokens(calls: list[dict], sid: str, name: str) -> int:
+    return sum(
+        seg["tokens_est"]
+        for call in calls
+        if call.get("span_id") == sid
+        for seg in call["segments"]
+        if seg.get("tagged") and seg["kind"] == name
+    )
+
+
 def build_report_data(events: list[dict]) -> dict:
     span_names: dict = {}
     span_tags: dict = {}
@@ -295,15 +305,6 @@ def build_report_data(events: list[dict]) -> dict:
         calls.sort(key=lambda c: c["timestamp"] or "")
         edges, truncated = _session_edges(calls)
 
-        def element_tokens(sid, name):
-            return sum(
-                seg["tokens_est"]
-                for call in calls
-                if call.get("span_id") == sid
-                for seg in call["segments"]
-                if seg.get("tagged") and seg["kind"] == name
-            )
-
         elements = [
             {
                 "name": name,
@@ -312,7 +313,7 @@ def build_report_data(events: list[dict]) -> dict:
                 "source": meta["payload"].get("source"),
                 "transform": meta["payload"].get("transform"),
                 "matched": (sid, name) in matched_tags,
-                "tokens_est": element_tokens(sid, name),
+                "tokens_est": _element_tokens(calls, sid, name),
                 "calls": consumers.get((sid, name), []),
             }
             for (sid, name), meta in tag_meta.items()
