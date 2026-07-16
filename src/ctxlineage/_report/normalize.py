@@ -193,9 +193,29 @@ def _normalize_call(event: dict, span_names=None, span_tags=None) -> tuple[dict,
     return call, matched
 
 
+_MIN_EDGE_TEXT = 15  # shorter outputs match everywhere; not evidence of flow
+
+
+def _session_edges(calls: list[dict]) -> list[dict]:
+    """PLAN 4(b) inference: output->later-input text match + same-span chains."""
+    edges: list[dict] = []
+    for i, call in enumerate(calls):
+        output = ((call.get("output") or {}).get("content")) or ""
+        if len(output) >= _MIN_EDGE_TEXT:
+            for later in calls[i + 1 :]:
+                if any(output in seg["content"] for seg in later["segments"]):
+                    edges.append({"from": call["id"], "to": later["id"], "kind": "output_text"})
+        if i + 1 < len(calls):
+            nxt = calls[i + 1]
+            if call.get("span_id") and call["span_id"] == nxt.get("span_id"):
+                edges.append({"from": call["id"], "to": nxt["id"], "kind": "same_span"})
+    return edges
+
+
 def build_report_data(events: list[dict]) -> dict:
     span_names: dict = {}
     span_tags: dict = {}
+    tag_meta: dict = {}
     for event in events:
         kind = event.get("event_type")
         span_id = event.get("span_id")
@@ -204,15 +224,22 @@ def build_report_data(events: list[dict]) -> dict:
             span_names[span_id] = payload.get("name")
         elif kind == "tag" and span_id:
             span_tags.setdefault(span_id, []).append(payload)
+            tag_meta.setdefault(
+                (span_id, payload.get("name")),
+                {"session": event.get("session_id", "unknown"), "payload": payload},
+            )
 
     sessions: dict[str, list[dict]] = {}
     errors = 0
     matched_tags: set = set()
+    consumers: dict = {}
     for event in events:
         if event.get("event_type") != "llm_call":
             continue
         call, matched = _normalize_call(event, span_names, span_tags)
         matched_tags.update((event.get("span_id"), name) for name in matched)
+        for name in matched:
+            consumers.setdefault((event.get("span_id"), name), []).append(event.get("call_id"))
         if call["error"]:
             errors += 1
         sessions.setdefault(event.get("session_id", "unknown"), []).append(call)
@@ -222,12 +249,27 @@ def build_report_data(events: list[dict]) -> dict:
     session_list = []
     for session_id, calls in sessions.items():
         calls.sort(key=lambda c: c["timestamp"] or "")
+        elements = [
+            {
+                "name": name,
+                "span_id": sid,
+                "span_name": span_names.get(sid),
+                "source": meta["payload"].get("source"),
+                "transform": meta["payload"].get("transform"),
+                "matched": (sid, name) in matched_tags,
+                "calls": consumers.get((sid, name), []),
+            }
+            for (sid, name), meta in tag_meta.items()
+            if meta["session"] == session_id
+        ]
         session_list.append(
             {
                 "id": session_id,
                 "started_at": calls[0]["timestamp"],
                 "ended_at": calls[-1]["timestamp"],
                 "calls": calls,
+                "edges": _session_edges(calls),
+                "elements": elements,
             }
         )
     session_list.sort(key=lambda s: s["started_at"] or "")

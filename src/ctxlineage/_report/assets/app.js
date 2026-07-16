@@ -288,16 +288,13 @@ function renderCallDetail() {
 /* ================= chain view (session flow) ================= */
 
 function findEdges(session) {
-  const list = [];
-  session.calls.forEach((a, i) => {
-    const out = (a.output && a.output.content) || "";
-    if (out.length < 15) return;
-    session.calls.forEach((b, j) => {
-      if (j <= i) return;
-      if (b.segments.some((g) => g.content.includes(out))) list.push([i, j]);
-    });
-  });
-  return list;
+  // edges are inferred in the report backend (normalize.py) — single source
+  // of truth shared with the Lineage Graph and the MCP server
+  const idx = new Map(session.calls.map((c, i) => [c.id, i]));
+  return (session.edges || [])
+    .filter((e) => e.kind === "output_text")
+    .map((e) => [idx.get(e.from), idx.get(e.to)])
+    .filter(([a, b]) => a != null && b != null);
 }
 
 /* a loop = consecutive calls of the SAME step whose outputs feed the next input */

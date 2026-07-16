@@ -292,3 +292,100 @@ def test_unmatched_tag_lowers_match_rate():
     call = data["sessions"][0]["calls"][0]
     assert all(not s.get("tagged") for s in call["segments"])
     assert data["stats"]["tags"]["match_rate"] == 0.0
+
+
+def _call_event(call_id, ts, messages, answer, session="s1", span_id=None):
+    return {
+        "schema_version": 1,
+        "event_type": "llm_call",
+        "session_id": session,
+        "span_id": span_id,
+        "call_id": call_id,
+        "timestamp": ts,
+        "payload": {
+            "provider": "openai",
+            "api": "chat.completions",
+            "request": {"model": "gpt-4o-mini", "messages": messages},
+            "stream": False,
+            "duration_ms": 5.0,
+            "call_stack": [],
+            "response": {
+                "object": "chat.completion",
+                "model": "gpt-4o-mini",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {"role": "assistant", "content": answer},
+                        "finish_reason": "stop",
+                    }
+                ],
+            },
+        },
+    }
+
+
+def test_output_text_edge_inferred():
+    answer = "The webhook secret rotates every 90 days."
+    events = [
+        _call_event(
+            "c1",
+            "2026-07-16T09:00:00+00:00",
+            [{"role": "user", "content": "How often does it rotate?"}],
+            answer,
+        ),
+        _call_event(
+            "c2",
+            "2026-07-16T09:01:00+00:00",
+            [{"role": "user", "content": "Earlier you said: " + answer + " Why?"}],
+            "Because of the security policy.",
+        ),
+    ]
+    data = normalize.build_report_data(events)
+    edges = data["sessions"][0]["edges"]
+    assert {"from": "c1", "to": "c2", "kind": "output_text"} in edges
+
+
+def test_short_output_produces_no_edge():
+    events = [
+        _call_event("c1", "2026-07-16T09:00:00+00:00", [{"role": "user", "content": "hi"}], "yes"),
+        _call_event(
+            "c2",
+            "2026-07-16T09:01:00+00:00",
+            [{"role": "user", "content": "you said yes before"}],
+            "indeed I did friend",
+        ),
+    ]
+    data = normalize.build_report_data(events)
+    assert data["sessions"][0]["edges"] == []
+
+
+def test_same_span_edge_between_consecutive_calls():
+    events = [
+        _call_event(
+            "c1",
+            "2026-07-16T09:00:00+00:00",
+            [{"role": "user", "content": "step one"}],
+            "short",
+            span_id="sp9",
+        ),
+        _call_event(
+            "c2",
+            "2026-07-16T09:01:00+00:00",
+            [{"role": "user", "content": "step two"}],
+            "short",
+            span_id="sp9",
+        ),
+    ]
+    data = normalize.build_report_data(events)
+    assert {"from": "c1", "to": "c2", "kind": "same_span"} in data["sessions"][0]["edges"]
+
+
+def test_elements_list_carries_provenance_and_consumers():
+    events = _span_events("THE CHUNK TEXT", "Context:\nTHE CHUNK TEXT\nQ: hi")
+    data = normalize.build_report_data(events)
+    (element,) = data["sessions"][0]["elements"]
+    assert element["name"] == "rag_chunks"
+    assert element["source"] == "qdrant:x"
+    assert element["span_name"] == "answer_query"
+    assert element["matched"] is True
+    assert element["calls"] == ["c1"]
