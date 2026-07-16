@@ -75,10 +75,16 @@ class StreamRecorderMixin:
         if self._self_done:
             return
         self._self_done = True
-        payload = self._self_payload
-        payload["response"] = self._self_assemble(self._self_chunks)
-        payload["usage"] = payload["response"].get("usage")
-        _state.emit("llm_call", payload, call_id=_events.new_id(), span_id=self._self_span_id)
+        try:
+            payload = self._self_payload
+            payload["response"] = self._self_assemble(self._self_chunks)
+            payload["usage"] = payload["response"].get("usage")
+            _state.emit("llm_call", payload, call_id=_events.new_id(), span_id=self._self_span_id)
+        except Exception as exc:  # e.g. malformed chunk shapes: never raise into the host
+            _state.warn_once(
+                "stream_finish",
+                f"ctxlineage: failed to record a stream ({exc!r}); the stream itself is intact",
+            )
 
 
 class StreamProxy(wrapt.ObjectProxy, StreamRecorderMixin):

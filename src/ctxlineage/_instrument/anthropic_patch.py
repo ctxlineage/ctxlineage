@@ -122,9 +122,18 @@ class _ManagerProxy(wrapt.ObjectProxy):
         finish_payload(self._self_payload, start)
         # MessageStream consumes lazily, so the fresh _raw_stream can be
         # swapped for a recording proxy; MessageStream.close() closes it too.
-        stream._raw_stream = StreamProxy(
-            stream._raw_stream, self._self_payload, _assemble_messages, self._self_span_id
-        )
+        # _raw_stream is a private SDK attribute: if the swap fails, hand back
+        # the untouched stream (unrecorded) rather than break the host app.
+        try:
+            stream._raw_stream = StreamProxy(
+                stream._raw_stream, self._self_payload, _assemble_messages, self._self_span_id
+            )
+        except Exception as exc:
+            _state.warn_once(
+                "anthropic_raw_stream_swap",
+                f"ctxlineage: could not instrument messages.stream() ({exc!r}); "
+                "this stream will not be recorded",
+            )
         return stream
 
     def __exit__(self, *exc):
@@ -147,9 +156,17 @@ class _AsyncManagerProxy(wrapt.ObjectProxy):
             record_error(finish_payload(self._self_payload, start), exc)
             raise
         finish_payload(self._self_payload, start)
-        stream._raw_stream = AsyncStreamProxy(
-            stream._raw_stream, self._self_payload, _assemble_messages, self._self_span_id
-        )
+        # See _ManagerProxy.__enter__: a failed swap degrades to no recording.
+        try:
+            stream._raw_stream = AsyncStreamProxy(
+                stream._raw_stream, self._self_payload, _assemble_messages, self._self_span_id
+            )
+        except Exception as exc:
+            _state.warn_once(
+                "anthropic_raw_stream_swap",
+                f"ctxlineage: could not instrument messages.stream() ({exc!r}); "
+                "this stream will not be recorded",
+            )
         return stream
 
     async def __aexit__(self, *exc):

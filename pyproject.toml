@@ -22,7 +22,7 @@ dev = [
   "jsonschema>=4.21",
   "ruff>=0.8",
   "anthropic>=0.43",
-  "langfuse>=3",
+  "langfuse>=4,<5",
 ]
 
 [build-system]
