@@ -1,0 +1,292 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ctxlineage — mockup: chain (session flow view)</title>
+<style>
+  :root {
+    --ink: #252B33; --teal: #1FBFAE;
+    --bg: #f6f8fa; --panel: #ffffff; --text: #252B33; --muted: #6b7682;
+    --border: #dde3e9; --hover: #eef2f5; --active: #e2f5f3;
+    --sys: #1FBFAE; --user: #4A90D9; --assistant: #9B7EDE; --tool: #E8A33D;
+    --tooldef: #b08a3e; --err: #d9534a; --track: #e8edf1;
+    --fn-bg: #252B33; --fn-border: #252B33; --fn-text: #e8ecf1;
+    --edge: rgba(31,191,174,.75); --edge-hi: #11897d;
+  }
+  [data-theme="dark"] {
+    --bg: #1b2026; --panel: #252B33; --text: #e8ecf1; --muted: #94a0ac;
+    --border: #39414b; --hover: #2d343d; --active: #1f3a38; --track: #39414b;
+    --fn-bg: #2e3741; --fn-border: rgba(31,191,174,.45);
+    --edge: rgba(31,191,174,.8); --edge-hi: #5fe8d9;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 14px/1.5 ui-sans-serif, system-ui, sans-serif;
+         background: var(--bg); color: var(--text); }
+  header { display: flex; align-items: center; gap: 12px; padding: 10px 20px;
+           background: var(--ink); color: #e8ecf1; }
+  header .name { font-weight: 700; font-size: 16px; }
+  header .name b { color: var(--teal); }
+  .legend { display: flex; gap: 10px; font-size: 11.5px; color: #94a0ac; }
+  .legend i { display: inline-block; width: 9px; height: 9px; border-radius: 2px;
+              margin-right: 4px; }
+  #theme { margin-left: auto; background: none; border: 1px solid #4a5460;
+           color: #e8ecf1; border-radius: 6px; padding: 4px 10px; cursor: pointer; }
+  .layout { display: grid; grid-template-columns: 240px 1fr; min-height: calc(100vh - 49px); }
+  nav { border-right: 1px solid var(--border); padding: 12px 0; }
+  .sessrow { padding: 10px 16px; cursor: pointer; border-left: 3px solid transparent; }
+  .sessrow:hover { background: var(--hover); }
+  .sessrow.sel { background: var(--active); border-left-color: var(--teal); }
+  .sessrow .id { font-weight: 600; font-size: 13px; }
+  .sessrow .sub { font-size: 11.5px; color: var(--muted); }
+
+  main { padding: 24px 28px 40px; position: relative; overflow-y: auto; }
+  #wrap { position: relative; max-width: 1060px; }
+  svg#edges { position: absolute; inset: 0; pointer-events: none; z-index: 2;
+              width: 100%; height: 100%; overflow: visible; }
+  .node { position: relative; z-index: 1; display: grid;
+          grid-template-columns: minmax(250px, 1.1fr) minmax(190px, .8fr) minmax(230px, 1fr);
+          gap: 18px; align-items: center; padding: 10px 0 26px; }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; justify-content: flex-end; }
+  .chip { font-size: 11.5px; font-weight: 600; border-radius: 6px; padding: 3px 9px;
+          border: 1px solid var(--border); background: var(--panel); }
+  .chip i { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 5px; }
+  .minibar { width: 100%; display: flex; height: 6px; border-radius: 3px; overflow: hidden;
+             background: var(--track); margin-top: 7px; }
+  .minibar i { height: 100%; }
+  .fnpill { background: var(--fn-bg); border: 1px solid var(--fn-border); color: var(--fn-text);
+            border-radius: 12px; padding: 10px 14px; text-align: center; }
+  .fnpill .step { font-weight: 700; font-size: 13.5px; font-family: ui-monospace, monospace; }
+  .fnpill .model { color: var(--teal); font-weight: 600; font-size: 11.5px; margin-top: 1px; }
+  .fnpill .meta { font-size: 11px; color: #94a0ac; margin-top: 2px; }
+  .outchip .ds { color: var(--teal); font-weight: 700; }
+  .outchip { background: var(--panel); border: 1px solid var(--border);
+             border-left: 4px solid var(--assistant); border-radius: 8px; padding: 8px 11px;
+             cursor: pointer; }
+  .outchip.err { border-left-color: var(--err); }
+  .outchip .t { font-size: 11px; color: var(--muted); display: flex; justify-content: space-between; }
+  .outchip .t b { color: var(--assistant); }
+  .outchip .p { font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+                margin-top: 2px; }
+  .outchip.err .p { color: var(--err); font-weight: 600; }
+  .outchip.hi { box-shadow: 0 0 0 2px var(--edge-hi); }
+  .node.hi-target .chips .chip.fed { box-shadow: 0 0 0 2px var(--edge-hi); }
+  .nlabel { position: absolute; left: -26px; top: 50%; transform: translateY(-50%);
+            color: var(--muted); font-size: 11px; }
+  .sesshead { font-size: 12px; color: var(--muted); margin: 0 0 18px; }
+  .loopbox { border: 1.5px dashed color-mix(in srgb, var(--teal) 55%, transparent);
+             border-radius: 14px; padding: 4px 18px 0; margin: 0 -18px 26px; position: relative; }
+  .loophead { display: inline-flex; gap: 8px; align-items: center; position: relative; top: -12px;
+              background: var(--bg); padding: 0 10px; color: var(--teal); font-weight: 700;
+              font-size: 12.5px; }
+  .loophead .why { color: var(--muted); font-weight: 400; }
+  .m3 { border: 1px dashed var(--border); color: var(--muted); border-radius: 8px;
+        font-size: 12px; padding: 8px 12px; max-width: 1060px; }
+</style>
+</head>
+<body data-theme="light">
+<header>
+  <svg width="22" height="22" viewBox="0 0 256 256"><g fill="none" stroke="#E8ECF1" stroke-width="15" stroke-linecap="round"><path d="M44 80 C 106 80, 102 128, 150 128"/><path d="M44 176 C 106 176, 102 128, 150 128"/><path d="M150 128 H 172"/></g><circle cx="44" cy="80" r="12" fill="#E8ECF1"/><circle cx="44" cy="176" r="12" fill="#E8ECF1"/><circle cx="196" cy="128" r="21" fill="#1FBFAE"/></svg>
+  <span class="name">ctx<b>lineage</b> <span style="color:#94a0ac;font-weight:400;font-size:13px">chain view</span></span>
+  <span class="legend">
+    <span><i style="background:var(--sys)"></i>app</span>
+    <span><i style="background:var(--user)"></i>user</span>
+    <span><i style="background:var(--assistant)"></i>llm output</span>
+    <span><i style="background:var(--tool)"></i>tool/MCP</span>
+    <span><i style="background:var(--tooldef)"></i>tool defs</span>
+  </span>
+  <button id="theme">☾ dark</button>
+</header>
+<div class="layout">
+  <nav id="nav"></nav>
+  <main><div id="wrap"><svg id="edges"></svg><div id="chain"></div></div>
+    <div class="m3">click an <b>output</b> to trace where it flows downstream.
+    edges are computed from the data (output text found inside a later call's input) —
+    the same inference M3 ships; tags will add source-level precision.</div>
+  </main>
+</div>
+<script type="application/json" id="ctxlineage-data">__DATA__</script>
+<script>
+const data = JSON.parse(document.getElementById("ctxlineage-data").textContent);
+const KIND = { system: "--sys", user: "--user", assistant: "--assistant",
+               tool: "--tool", tool_defs: "--tooldef" };
+const LABEL = { system: "app", user: "user", assistant: "llm out", tool_defs: "tool defs" };
+const css = (k) => `var(${KIND[k] ?? "--muted"})`;
+const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) =>
+  ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const fmt = (n) => n == null ? "–" : n.toLocaleString("en-US");
+
+const saved = localStorage.getItem("ctxl-theme-chain");
+let theme = saved ?? (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+const applyTheme = () => {
+  document.body.dataset.theme = theme;
+  document.getElementById("theme").textContent = theme === "dark" ? "☀ light" : "☾ dark";
+  drawEdges();
+};
+document.getElementById("theme").onclick = () => {
+  theme = theme === "dark" ? "light" : "dark";
+  localStorage.setItem("ctxl-theme-chain", theme); applyTheme();
+};
+
+let sel = 0, hiFrom = null;
+
+function findEdges(session) {
+  const list = [];
+  session.calls.forEach((a, i) => {
+    const out = a.output?.content ?? "";
+    if (out.length < 15) return;
+    session.calls.forEach((b, j) => {
+      if (j <= i) return;
+      if (b.segments.some((g) => g.content.includes(out))) list.push([i, j]);
+    });
+  });
+  return list;
+}
+
+// innermost user function from the call stack — "which LLM step is this"
+function step(c) {
+  const frame = c.call_stack?.[0];
+  if (!frame) return null;
+  const parts = frame.split(":");
+  return parts.length >= 2 ? parts[1] : null;
+}
+
+// a loop = consecutive calls of the SAME step (not just model) where each
+// output feeds the next call's input
+function findLoops(session, edges) {
+  const next = new Set(edges.filter(([i, j]) => j === i + 1).map(([i]) => i));
+  const runs = [];
+  let start = null;
+  session.calls.forEach((c, i) => {
+    const nx = session.calls[i + 1];
+    const chained = next.has(i) && nx?.model === c.model && step(nx) === step(c);
+    if (chained && start === null) start = i;
+    if (!chained && start !== null) { runs.push([start, i]); start = null; }
+  });
+  if (start !== null) runs.push([start, session.calls.length - 1]);
+  return runs.filter(([a, b]) => b - a >= 1);
+}
+
+function renderNav() {
+  let h = "";
+  data.sessions.forEach((s, i) => {
+    h += `<div class="sessrow ${i === sel ? "sel" : ""}" data-i="${i}">
+      <div class="id">${esc(s.id)}</div>
+      <div class="sub">${s.calls.length} calls</div></div>`;
+  });
+  const nav = document.getElementById("nav");
+  nav.innerHTML = h;
+  nav.querySelectorAll(".sessrow").forEach((el) =>
+    el.addEventListener("click", () => { sel = +el.dataset.i; hiFrom = null; render(); }));
+}
+
+function nodeHtml(c, i, targets, downstream) {
+  const agg = new Map();
+  c.segments.forEach((g) => {
+    const key = g.kind === "tool" ? `tool:${g.name ?? "tool"}` : g.kind;
+    const cur = agg.get(key) ?? { kind: g.kind, label: g.kind === "tool" ? (g.name ?? "tool/MCP") : (LABEL[g.kind] ?? g.kind), tok: 0, n: 0 };
+    cur.tok += g.tokens_est; cur.n += 1; agg.set(key, cur);
+  });
+  const total = c.segments.reduce((a, g) => a + g.tokens_est, 0) || 1;
+  const chips = [...agg.values()].map((a) =>
+    `<span class="chip ${a.kind === "assistant" ? "fed" : ""}">
+       <i style="background:${css(a.kind)}"></i>${esc(a.label)}${a.n > 1 ? " ×" + a.n : ""} · ${fmt(a.tok)}</span>`).join("");
+  const minibar = c.segments.map((g) =>
+    `<i style="width:${(100 * g.tokens_est / total).toFixed(2)}%;background:${css(g.kind)}"></i>`).join("");
+  const ds = downstream ? `<span class="ds" title="feeds ${downstream} downstream call(s)">↳ ${downstream}</span>` : "";
+  const out = c.error
+    ? `<div class="outchip err" data-i="${i}"><div class="t"><span>error</span></div>
+       <div class="p">${esc(c.error.type)}: ${esc(c.error.message)}</div></div>`
+    : `<div class="outchip ${hiFrom === i ? "hi" : ""}" data-i="${i}">
+       <div class="t"><b>output</b><span>${ds} ${c.usage ? fmt(c.usage.completion_tokens) + " tok" : ""}</span></div>
+       <div class="p">${esc(c.output?.content ?? "")}</div></div>`;
+  return `<div class="node ${targets.includes(i) ? "hi-target" : ""}" data-n="${i}">
+    <span class="nlabel">${i + 1}</span>
+    <div><div class="chips">${chips}</div><div class="minibar">${minibar}</div></div>
+    <div class="fnpill"><div class="step">${esc(step(c) ?? "llm call")}()</div>
+      <div class="model">${esc(c.model)}</div>
+      <div class="meta">${esc(c.api)} · ${c.duration_ms ? c.duration_ms.toFixed(0) + "ms" : "–"}${c.stream ? " · stream" : ""}</div></div>
+    ${out}</div>`;
+}
+
+function renderChain() {
+  const s = data.sessions[sel];
+  const edges = findEdges(s);
+  const loops = findLoops(s, edges);
+  const targets = hiFrom === null ? [] : edges.filter((e) => e[0] === hiFrom).map((e) => e[1]);
+  const dsCount = (i) => edges.filter((e) => e[0] === i && e[1] > i + 1).length;
+  let h = `<p class="sesshead">session <b>${esc(s.id)}</b> — ${s.calls.length} calls, time flows ↓ ;
+           <b>↳ n</b> = feeds n later calls beyond the next (click output to trace)</p>`;
+  let i = 0;
+  while (i < s.calls.length) {
+    const loop = loops.find(([a]) => a === i);
+    if (loop) {
+      const [a, b] = loop;
+      h += `<div class="loopbox"><span class="loophead">↺ loop ×${b - a + 1}
+        <span class="why">${esc(step(s.calls[a]) ?? "same fn")}() repeats — each output feeds the next input</span></span>`;
+      for (let k = a; k <= b; k++) h += nodeHtml(s.calls[k], k, targets, dsCount(k));
+      h += `</div>`;
+      i = b + 1;
+    } else {
+      h += nodeHtml(s.calls[i], i, targets, dsCount(i));
+      i += 1;
+    }
+  }
+  document.getElementById("chain").innerHTML = h;
+  document.querySelectorAll(".outchip").forEach((el) =>
+    el.addEventListener("click", () => {
+      hiFrom = hiFrom === +el.dataset.i ? null : +el.dataset.i; render();
+    }));
+  requestAnimationFrame(drawEdges);
+}
+
+function drawEdges() {
+  const s = data.sessions[sel];
+  if (!s) return;
+  const svg = document.getElementById("edges");
+  const wrap = document.getElementById("wrap");
+  const wr = wrap.getBoundingClientRect();
+  svg.setAttribute("viewBox", `0 0 ${wr.width} ${wr.height}`);
+  let h = `<defs>
+    <marker id="arr" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="${getComputedStyle(document.body).getPropertyValue("--edge").trim() || "#1FBFAE"}"/></marker>
+    <marker id="arrhi" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="${getComputedStyle(document.body).getPropertyValue("--edge-hi").trim() || "#11897d"}"/></marker>
+  </defs>`;
+  const all = findEdges(s);
+  // default: only the quiet adjacent chain; click an output to fan out its full downstream
+  const visible = hiFrom === null
+    ? all.filter(([i, j]) => j === i + 1)
+    : all.filter(([i]) => i === hiFrom);
+  const GUTTER = -34;
+  visible.forEach(([i, j]) => {
+    const a = document.querySelector(`.node[data-n="${i}"] .outchip`);
+    const bNode = document.querySelector(`.node[data-n="${j}"]`);
+    const b = bNode?.querySelector(".chips .chip.fed") ?? bNode?.querySelector(".chips");
+    if (!a || !b) return;
+    const ar = a.getBoundingClientRect(), br = b.getBoundingClientRect();
+    const hi = hiFrom === i;
+    const stroke = `stroke="${hi ? "var(--edge-hi)" : "var(--edge)"}"
+      stroke-width="${hi ? 2.5 : 2}" fill="none" marker-end="url(#${hi ? "arrhi" : "arr"})"`;
+    if (j === i + 1) {
+      // short hop through the row gap, entering the top of the fed chip
+      const x1 = ar.left - wr.left + 18, y1 = ar.bottom - wr.top - 2;
+      const x2 = br.left + br.width / 2 - wr.left, y2 = br.top - wr.top - 2;
+      h += `<path d="M ${x1} ${y1} C ${x1} ${y1 + 30}, ${x2} ${y2 - 30}, ${x2} ${y2}" ${stroke}/>`;
+    } else {
+      // long hop: down the left gutter, entering the left edge of the fed chip
+      const x1 = ar.left - wr.left + 18, y1 = ar.bottom - wr.top - 2;
+      const x2 = br.left - wr.left - 6, y2 = br.top + br.height / 2 - wr.top;
+      h += `<path d="M ${x1} ${y1} C ${x1} ${y1 + 44}, ${GUTTER} ${y1 + 30}, ${GUTTER} ${(y1 + y2) / 2}
+            C ${GUTTER} ${y2 - 6}, ${x2 - 40} ${y2}, ${x2} ${y2}" ${stroke}/>`;
+    }
+  });
+  svg.innerHTML = h;
+}
+
+function render() { renderNav(); renderChain(); }
+render(); applyTheme();
+addEventListener("resize", drawEdges);
+</script>
+</body>
+</html>
