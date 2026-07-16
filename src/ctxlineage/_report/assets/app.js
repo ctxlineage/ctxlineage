@@ -206,8 +206,9 @@ function renderCallDetail() {
   const total = c.segments.reduce((a, g) => a + g.tokens_est, 0) || 1;
   const inTok = c.usage ? c.usage.prompt_tokens : c.input_tokens_est;
   const pct = c.context_window ? (100 * inTok / c.context_window) : null;
-  const sys = c.segments.filter((g) => g.kind === "system");
-  const rest = c.segments.filter((g) => g.kind !== "system");
+  // role (not kind): a tagged system prompt stays in the fn card, with provenance
+  const sys = c.segments.filter((g) => g.role === "system");
+  const rest = c.segments.filter((g) => g.role !== "system");
 
   const winSegs = c.segments.map((g) =>
     `<i style="width:${(100 * g.tokens_est / total).toFixed(2)}%;background:${kindColor(g.kind)}"></i>`).join("");
@@ -233,7 +234,10 @@ function renderCallDetail() {
   const sysTok = sys.reduce((a, g) => a + g.tokens_est, 0);
   const instr = sys.length ? `
     <div class="instr" id="instr">
-      <div class="lbl"><span>instructions</span><span>${fmt(sysTok)} tok · ${(100 * sysTok / total).toFixed(0)}% of input</span></div>
+      <div class="lbl"><span>instructions${
+        (() => { const t = [...new Set(sys.filter((g) => g.tagged).map((g) => segLabel(g)))];
+                 return t.length ? " — " + esc(t.join(" + ")) : ""; })()
+      }</span><span>${fmt(sysTok)} tok · ${(100 * sysTok / total).toFixed(0)}% of input</span></div>
       <div class="txt">${esc(sys.map((g) => g.content).join("\n\n"))}</div>
     </div>` : "";
 
