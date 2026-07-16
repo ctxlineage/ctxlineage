@@ -23,6 +23,9 @@ except ImportError as exc:  # pragma: no cover - exercised only without the extr
 from ctxlineage._report import html, normalize
 
 _TRUNCATE_AT = 700  # get_call default: keep tool output agent-context-friendly
+_MAX_SESSIONS = 50  # list_sessions default: most recent sessions only
+_MAX_IDS = 200  # per-session id-list cap in list_sessions
+_MAX_DOWNSTREAM = 200  # transitive-closure cap in get_lineage
 
 mcp = FastMCP("ctxlineage")
 
@@ -78,7 +81,7 @@ def _find_call(data: dict, call_id: str) -> tuple[dict, dict] | None:
     return None
 
 
-def _downstream_ids(edges: list[dict], roots: list[str]) -> list[str]:
+def _downstream_ids(edges: list[dict], roots: list[str]) -> tuple[list[str], bool]:
     """Transitive closure over session edges, in stable discovery order."""
     seen = list(roots)
     result: list[str] = []
@@ -87,32 +90,53 @@ def _downstream_ids(edges: list[dict], roots: list[str]) -> list[str]:
         source = frontier.pop(0)
         for edge in edges:
             if edge["from"] == source and edge["to"] not in seen:
+                if len(result) >= _MAX_DOWNSTREAM:
+                    return result, True
                 seen.append(edge["to"])
                 result.append(edge["to"])
                 frontier.append(edge["to"])
-    return result
+    return result, False
 
 
 @mcp.tool()
-def list_sessions() -> dict:
+def list_sessions(limit: int = _MAX_SESSIONS) -> dict:
     """List recorded sessions with per-session summaries and global stats
     (call/error counts, tag match rate). Cheap index tool: returns ids to feed
-    into get_call / get_lineage, never prompt bodies."""
+    into get_call / get_lineage, never prompt bodies. Only the most recent
+    `limit` sessions are returned and long id lists are capped — truncation is
+    always disclosed via `*_truncated` flags; `skipped_lines` counts malformed
+    event lines ignored while parsing."""
     data = _store.report_data()
-    sessions = [
-        {
+    recent = data["sessions"][-limit:] if limit > 0 else data["sessions"]
+    sessions = []
+    for s in recent:
+        call_ids = [c["id"] for c in s["calls"]]
+        element_ids = [_element_id(e) for e in s["elements"]]
+        summary = {
             "id": s["id"],
             "started_at": s["started_at"],
             "ended_at": s["ended_at"],
-            "call_count": len(s["calls"]),
+            "call_count": len(call_ids),
+            "element_count": len(element_ids),
             "error_count": sum(1 for c in s["calls"] if c["error"]),
             "models": sorted({c["model"] for c in s["calls"] if c["model"]}),
-            "call_ids": [c["id"] for c in s["calls"]],
-            "element_ids": [_element_id(e) for e in s["elements"]],
+            "call_ids": call_ids[:_MAX_IDS],
+            "element_ids": element_ids[:_MAX_IDS],
         }
-        for s in data["sessions"]
-    ]
-    return {"stats": data["stats"], "sessions": sessions}
+        if len(call_ids) > _MAX_IDS:
+            summary["call_ids_truncated"] = True
+        if len(element_ids) > _MAX_IDS:
+            summary["element_ids_truncated"] = True
+        sessions.append(summary)
+    result = {
+        "stats": data["stats"],
+        "sessions": sessions,
+        "skipped_lines": _store.skipped_lines,
+    }
+    if len(sessions) < len(data["sessions"]):
+        result["sessions_truncated"] = True
+        result["total_sessions"] = len(data["sessions"])
+    return result
 
 
 @mcp.tool()
@@ -142,11 +166,13 @@ def get_call(call_id: str, full_content: bool = False) -> dict:
 
 def _element_lineage(session: dict, element: dict) -> dict:
     node = {"type": "element", "element_id": _element_id(element), **element}
+    downstream, downstream_truncated = _downstream_ids(session["edges"], element["calls"])
     return {
         "session_id": session["id"],
         "node": node,
         "consuming_call_ids": element["calls"],
-        "downstream_call_ids": _downstream_ids(session["edges"], element["calls"]),
+        "downstream_call_ids": downstream,
+        "downstream_truncated": downstream_truncated,
         "edges_truncated": session["edges_truncated"],
     }
 
@@ -165,6 +191,7 @@ def get_lineage(id: str) -> dict:
         edges_out = [e for e in session["edges"] if e["from"] == id]
         node = {k: call[k] for k in ("id", "span_id", "step", "timestamp", "model", "error")}
         node["type"] = "call"
+        downstream, downstream_truncated = _downstream_ids(session["edges"], [id])
         return {
             "session_id": session["id"],
             "node": node,
@@ -173,7 +200,8 @@ def get_lineage(id: str) -> dict:
             ],
             "edges_in": edges_in,
             "edges_out": edges_out,
-            "downstream_call_ids": _downstream_ids(session["edges"], [id]),
+            "downstream_call_ids": downstream,
+            "downstream_truncated": downstream_truncated,
             "edges_truncated": session["edges_truncated"],
         }
     matches = [
@@ -195,10 +223,19 @@ def get_lineage(id: str) -> dict:
 @mcp.tool()
 def generate_report(out: str = "ctxlineage-report.html") -> dict:
     """Build the self-contained HTML report (Call Anatomy + Lineage Graph)
-    from the recorded events and write it to `out`. Returns the absolute path
-    and summary counts."""
+    from the recorded events and write it to `out` (resolved against the
+    server's working directory; must end in .html/.htm and may not point
+    inside the event-log directory). Returns the absolute path and summary
+    counts."""
     data = _store.report_data()
-    out_path = Path(out)
+    out_path = Path(out).resolve()
+    if out_path.suffix.lower() not in (".html", ".htm"):
+        raise ValueError(f"Refusing to write {out!r}: the report path must end in .html or .htm")
+    store_dir = _store.directory.resolve()
+    if out_path == store_dir or store_dir in out_path.parents:
+        raise ValueError(
+            f"Refusing to write {out!r}: the event-log directory {store_dir} is read-only"
+        )
     out_path.write_text(html.render(data), encoding="utf-8")
     return {
         "path": str(out_path.resolve()),

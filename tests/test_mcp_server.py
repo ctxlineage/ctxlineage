@@ -172,6 +172,30 @@ def test_list_sessions_summaries(events_dir):
     assert "segments" not in json.dumps(data)
 
 
+def test_list_sessions_limit_and_truncation(events_dir):
+    data = server.list_sessions(limit=1)
+    assert [s["id"] for s in data["sessions"]] == ["s2"]
+    assert data["sessions_truncated"] is True
+    assert data["total_sessions"] == 2
+    full = server.list_sessions()
+    assert "sessions_truncated" not in full
+    assert all("call_ids_truncated" not in s for s in full["sessions"])
+
+
+def test_list_sessions_caps_id_lists(events_dir, monkeypatch):
+    monkeypatch.setattr(server, "_MAX_IDS", 1)
+    s1 = server.list_sessions()["sessions"][0]
+    assert s1["call_ids"] == ["c1"]
+    assert s1["call_ids_truncated"] is True
+    assert s1["call_count"] == 2
+
+
+def test_list_sessions_reports_skipped_lines(events_dir):
+    with (events_dir / "events.jsonl").open("a", encoding="utf-8") as fh:
+        fh.write('{"half a line\n')
+    assert server.list_sessions()["skipped_lines"] == 1
+
+
 def test_get_call_truncates_by_default(events_dir):
     call = server.get_call("c2")
     assert call["session_id"] == "s1"
@@ -246,6 +270,22 @@ def test_generate_report(events_dir, tmp_path):
     assert result["calls"] == 4
     page = out.read_text(encoding="utf-8")
     assert "report_version" in page
+
+
+def test_generate_report_refuses_event_log_directory(events_dir):
+    before = (events_dir / "events.jsonl").read_bytes()
+    with pytest.raises(ValueError, match="read-only"):
+        server.generate_report(str(events_dir / "report.html"))
+    with pytest.raises(ValueError, match=r"\.html"):
+        server.generate_report(str(events_dir.parent / "events.jsonl"))
+    assert (events_dir / "events.jsonl").read_bytes() == before
+
+
+def test_get_lineage_downstream_cap(events_dir, monkeypatch):
+    monkeypatch.setattr(server, "_MAX_DOWNSTREAM", 0)
+    lineage = server.get_lineage("c1")
+    assert lineage["downstream_call_ids"] == []
+    assert lineage["downstream_truncated"] is True
 
 
 def test_reflects_appended_events(events_dir):
