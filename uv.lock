@@ -360,7 +360,7 @@ requires-dist = [
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "anthropic", specifier = ">=0.40" },
+    { name = "anthropic", specifier = ">=0.43" },
     { name = "jsonschema", specifier = ">=4.21" },
     { name = "langfuse", specifier = ">=3" },
     { name = "openai", specifier = ">=1.40" },
