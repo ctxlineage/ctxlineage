@@ -30,3 +30,6 @@ frontend/dist/
 .vscode/
 .DS_Store
 .coverage
+
+# Playwright MCP artifacts
+.playwright-mcp/
