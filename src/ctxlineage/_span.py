@@ -2,12 +2,15 @@
 
 Optional by design (PLAN.md §3): nothing here is required for capture to work —
 tagging only enriches the report. Everything is a silent no-op before init().
+
+Span context propagates like contextvars do: each async task sees its own
+span, but NEW THREADS DO NOT inherit the caller's span — propagate manually
+with contextvars.copy_context() when fanning work out to threads.
 """
 
 from __future__ import annotations
 
 import contextvars
-import json
 
 from ctxlineage import _events, _state
 
@@ -17,15 +20,25 @@ _current: contextvars.ContextVar[Span | None] = contextvars.ContextVar(
 
 
 def current() -> Span | None:
-    """The innermost active span in this task/thread, if any."""
+    """The innermost active span in the current context, if any.
+
+    Async tasks are isolated; new threads start with no span (contextvars
+    semantics) — see the module docstring for cross-thread propagation.
+    """
     return _current.get()
+
+
+def current_id() -> str | None:
+    """span_id of the active span, or None."""
+    active = _current.get()
+    return active.span_id if active else None
 
 
 def _stringify(content) -> str:
     if isinstance(content, str):
         return content
     try:
-        return json.dumps(content, ensure_ascii=False, default=str)
+        return _events.json_str(content)
     except Exception:
         return str(content)
 
@@ -41,6 +54,8 @@ class Span:
     def tag(
         self, name: str, content, *, source: str | None = None, transform: str | None = None
     ) -> None:
+        if not _state.is_configured():
+            return  # true no-op: don't pay serialization for a discarded event
         payload: dict = {"name": name, "content": _stringify(content)}
         if source is not None:
             payload["source"] = source

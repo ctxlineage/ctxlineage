@@ -74,21 +74,16 @@ def _finish_payload(payload: dict, start: float) -> dict:
     return payload
 
 
-def _active_span_id():
-    span = _span.current()
-    return span.span_id if span else None
-
-
-def _record_response(payload: dict, result, span_id=None) -> None:
+def _record_response(payload: dict, result) -> None:
     data = _dump(result)
     payload["response"] = data
     payload["usage"] = data.get("usage") if isinstance(data, dict) else None
-    _state.emit("llm_call", payload, call_id=_events.new_id(), span_id=span_id)
+    _state.emit("llm_call", payload, call_id=_events.new_id())
 
 
-def _record_error(payload: dict, exc: BaseException, span_id=None) -> None:
+def _record_error(payload: dict, exc: BaseException) -> None:
     payload["error"] = {"type": type(exc).__name__, "message": str(exc)}
-    _state.emit("llm_call", payload, call_id=_events.new_id(), span_id=span_id)
+    _state.emit("llm_call", payload, call_id=_events.new_id())
 
 
 def _make_sync_wrapper(api: str):
@@ -96,17 +91,17 @@ def _make_sync_wrapper(api: str):
         if not _state.is_configured():
             return wrapped(*args, **kwargs)
         payload = _base_payload(api, kwargs)
-        span_id = _active_span_id()
         start = time.monotonic()
         try:
             result = wrapped(*args, **kwargs)
         except Exception as exc:
-            _record_error(_finish_payload(payload, start), exc, span_id)
+            _record_error(_finish_payload(payload, start), exc)
             raise
         _finish_payload(payload, start)
         if payload["stream"]:
-            return _StreamProxy(result, payload, api, span_id)
-        _record_response(payload, result, span_id)
+            # streams may be consumed after the span exits: bind the span now
+            return _StreamProxy(result, payload, api, _span.current_id())
+        _record_response(payload, result)
         return result
 
     return wrapper
@@ -117,17 +112,17 @@ def _make_async_wrapper(api: str):
         if not _state.is_configured():
             return await wrapped(*args, **kwargs)
         payload = _base_payload(api, kwargs)
-        span_id = _active_span_id()
         start = time.monotonic()
         try:
             result = await wrapped(*args, **kwargs)
         except Exception as exc:
-            _record_error(_finish_payload(payload, start), exc, span_id)
+            _record_error(_finish_payload(payload, start), exc)
             raise
         _finish_payload(payload, start)
         if payload["stream"]:
-            return _AsyncStreamProxy(result, payload, api, span_id)
-        _record_response(payload, result, span_id)
+            # streams may be consumed after the span exits: bind the span now
+            return _AsyncStreamProxy(result, payload, api, _span.current_id())
+        _record_response(payload, result)
         return result
 
     return wrapper

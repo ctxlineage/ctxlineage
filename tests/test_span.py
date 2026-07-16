@@ -12,18 +12,10 @@ MESSAGES = [{"role": "user", "content": "Say hello"}]
 SSE_HEADERS = {"content-type": "text/event-stream"}
 
 
-def read_events(directory):
-    path = directory / "events.jsonl"
-    if not path.exists():
-        return []
-    return [json.loads(line) for line in path.read_text().splitlines()]
-
-
-def test_span_emits_start_and_end(tmp_path, validate_event):
-    ctxlineage.init(tmp_path)
+def test_span_emits_start_and_end(capture, validate_event):
     with ctxlineage.span("answer_user_query"):
         pass
-    events = read_events(tmp_path)
+    events = capture()
     assert [e["event_type"] for e in events] == ["span_start", "span_end"]
     for event in events:
         validate_event(event)
@@ -31,12 +23,11 @@ def test_span_emits_start_and_end(tmp_path, validate_event):
     assert events[0]["span_id"] == events[1]["span_id"]
 
 
-def test_tag_event_content_and_provenance(tmp_path, validate_event):
-    ctxlineage.init(tmp_path)
+def test_tag_event_content_and_provenance(capture, validate_event):
     with ctxlineage.span("qa") as sp:
         sp.tag("rag_chunks", ["doc a", "doc b"], source="qdrant:products_v2", transform="top_k")
         sp.tag("system", "You are helpful.")
-    tags = [e for e in read_events(tmp_path) if e["event_type"] == "tag"]
+    tags = [e for e in capture() if e["event_type"] == "tag"]
     assert len(tags) == 2
     for tag in tags:
         validate_event(tag)
@@ -50,8 +41,7 @@ def test_tag_event_content_and_provenance(tmp_path, validate_event):
     assert "source" not in tags[1]["payload"]
 
 
-def test_nested_spans_restore_outer(tmp_path):
-    ctxlineage.init(tmp_path)
+def test_nested_spans_restore_outer(capture):
     with ctxlineage.span("outer") as outer:
         assert _span.current() is outer
         with ctxlineage.span("inner") as inner:
@@ -63,11 +53,32 @@ def test_nested_spans_restore_outer(tmp_path):
 def test_span_before_init_is_silent(tmp_path):
     with ctxlineage.span("x") as sp:
         sp.tag("a", "b")
-    assert read_events(tmp_path) == []
+    assert not (tmp_path / "events.jsonl").exists()
 
 
-async def test_async_tasks_have_isolated_spans(tmp_path):
-    ctxlineage.init(tmp_path)
+def test_tag_skips_serialization_when_unconfigured():
+    class Unserializable:
+        def __iter__(self):  # would explode if _stringify iterated it
+            raise RuntimeError("must not be serialized")
+
+    with ctxlineage.span("x") as sp:
+        sp.tag("chunks", Unserializable())  # must not raise, must not serialize
+
+
+def test_direct_emit_inside_span_defaults_span_id(capture):
+    from ctxlineage import _state
+
+    with ctxlineage.span("qa") as sp:
+        _state.emit(
+            "llm_call",
+            {"provider": "other", "api": "messages", "request": {}},
+            call_id="c1",
+        )
+    (event,) = [e for e in capture() if e["event_type"] == "llm_call"]
+    assert event["span_id"] == sp.span_id
+
+
+async def test_async_tasks_have_isolated_spans(capture):
     seen = {}
 
     async def work(name):

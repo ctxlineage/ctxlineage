@@ -109,8 +109,7 @@
       "then": {
         "properties": {
           "span_id": {
-            "type": "string",
-            "minLength": 1
+            "$ref": "#/$defs/requiredSpanId"
           },
           "payload": {
             "type": "object",
@@ -152,8 +151,7 @@
       "then": {
         "properties": {
           "span_id": {
-            "type": "string",
-            "minLength": 1
+            "$ref": "#/$defs/requiredSpanId"
           },
           "payload": {
             "type": "object",
@@ -171,5 +169,11 @@
         }
       }
     }
-  ]
+  ],
+  "$defs": {
+    "requiredSpanId": {
+      "type": "string",
+      "minLength": 1
+    }
+  }
 }

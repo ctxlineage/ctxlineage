@@ -12,6 +12,11 @@ from pathlib import Path
 SCHEMA_VERSION = 1
 
 
+def json_str(value) -> str:
+    """Single serialization policy for anything ctxlineage persists."""
+    return json.dumps(value, ensure_ascii=False, default=str)
+
+
 def new_id() -> str:
     return uuid.uuid4().hex
 
@@ -52,9 +57,9 @@ class EventWriter:
         self._lock = threading.Lock()
 
     def write(self, event: dict) -> None:
-        # default=str: non-JSON values (datetimes, pydantic leftovers, ...)
-        # degrade to strings instead of losing the whole event.
-        line = json.dumps(event, ensure_ascii=False, default=str)
+        # via json_str: non-JSON values degrade to strings instead of
+        # losing the whole event.
+        line = json_str(event)
         with self._lock:
             self._dir.mkdir(parents=True, exist_ok=True)
             with self.path.open("a", encoding="utf-8") as f:
