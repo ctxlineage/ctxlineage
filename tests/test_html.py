@@ -61,6 +61,7 @@ def test_render_contains_all_views_and_theme_toggle():
     assert 'data-view="overview"' in out
     assert 'data-view="calls"' in out
     assert 'data-view="chain"' in out
+    assert 'data-view="graph"' in out
     assert 'id="theme"' in out
     assert "prefers-color-scheme" in out  # OS-follow default
     assert '[data-theme="dark"]' in out  # dark tokens present

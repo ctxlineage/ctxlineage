@@ -141,6 +141,23 @@ def _responses_output(response) -> dict | None:
     return {"content": "\n".join(texts), "finish_reason": None}
 
 
+def _canonical_usage(usage):
+    """Provider-agnostic usage: anthropic's input_/output_tokens gain the
+    prompt_/completion_ vocabulary the report reads; original keys pass through."""
+    if not isinstance(usage, dict):
+        return usage
+    if "prompt_tokens" in usage or "input_tokens" not in usage:
+        return usage
+    prompt = usage.get("input_tokens") or 0
+    completion = usage.get("output_tokens") or 0
+    return {
+        **usage,
+        "prompt_tokens": prompt,
+        "completion_tokens": completion,
+        "total_tokens": usage.get("total_tokens", prompt + completion),
+    }
+
+
 def _normalize_call(event: dict, span_names=None, span_tags=None) -> tuple[dict, set]:
     payload = event.get("payload") or {}
     api = payload.get("api", "")
@@ -183,7 +200,7 @@ def _normalize_call(event: dict, span_names=None, span_tags=None) -> tuple[dict,
         "duration_ms": payload.get("duration_ms"),
         "error": payload.get("error"),
         "context_window": context_window_for(model),
-        "usage": payload.get("usage"),
+        "usage": _canonical_usage(payload.get("usage")),
         "segments": segments,
         "input_tokens_est": sum(s["tokens_est"] for s in segments),
         "tagged_tokens_est": sum(s["tokens_est"] for s in segments if s.get("tagged")),
@@ -238,6 +255,16 @@ def _session_edges(calls: list[dict]) -> tuple[list[dict], bool]:
     return edges, truncated
 
 
+def _element_tokens(calls: list[dict], sid: str, name: str) -> int:
+    return sum(
+        seg["tokens_est"]
+        for call in calls
+        if call.get("span_id") == sid
+        for seg in call["segments"]
+        if seg.get("tagged") and seg["kind"] == name
+    )
+
+
 def build_report_data(events: list[dict]) -> dict:
     span_names: dict = {}
     span_tags: dict = {}
@@ -277,6 +304,7 @@ def build_report_data(events: list[dict]) -> dict:
     for session_id, calls in sessions.items():
         calls.sort(key=lambda c: c["timestamp"] or "")
         edges, truncated = _session_edges(calls)
+
         elements = [
             {
                 "name": name,
@@ -285,6 +313,7 @@ def build_report_data(events: list[dict]) -> dict:
                 "source": meta["payload"].get("source"),
                 "transform": meta["payload"].get("transform"),
                 "matched": (sid, name) in matched_tags,
+                "tokens_est": _element_tokens(calls, sid, name),
                 "calls": consumers.get((sid, name), []),
             }
             for (sid, name), meta in tag_meta.items()
