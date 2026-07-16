@@ -292,3 +292,181 @@ def test_unmatched_tag_lowers_match_rate():
     call = data["sessions"][0]["calls"][0]
     assert all(not s.get("tagged") for s in call["segments"])
     assert data["stats"]["tags"]["match_rate"] == 0.0
+
+
+def _call_event(call_id, ts, messages, answer, session="s1", span_id=None):
+    return {
+        "schema_version": 1,
+        "event_type": "llm_call",
+        "session_id": session,
+        "span_id": span_id,
+        "call_id": call_id,
+        "timestamp": ts,
+        "payload": {
+            "provider": "openai",
+            "api": "chat.completions",
+            "request": {"model": "gpt-4o-mini", "messages": messages},
+            "stream": False,
+            "duration_ms": 5.0,
+            "call_stack": [],
+            "response": {
+                "object": "chat.completion",
+                "model": "gpt-4o-mini",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {"role": "assistant", "content": answer},
+                        "finish_reason": "stop",
+                    }
+                ],
+            },
+        },
+    }
+
+
+def test_output_text_edge_inferred():
+    answer = "The webhook secret rotates every 90 days."
+    events = [
+        _call_event(
+            "c1",
+            "2026-07-16T09:00:00+00:00",
+            [{"role": "user", "content": "How often does it rotate?"}],
+            answer,
+        ),
+        _call_event(
+            "c2",
+            "2026-07-16T09:01:00+00:00",
+            [{"role": "user", "content": "Earlier you said: " + answer + " Why?"}],
+            "Because of the security policy.",
+        ),
+    ]
+    data = normalize.build_report_data(events)
+    edges = data["sessions"][0]["edges"]
+    assert {"from": "c1", "to": "c2", "kind": "output_text"} in edges
+
+
+def test_short_output_produces_no_edge():
+    events = [
+        _call_event("c1", "2026-07-16T09:00:00+00:00", [{"role": "user", "content": "hi"}], "yes"),
+        _call_event(
+            "c2",
+            "2026-07-16T09:01:00+00:00",
+            [{"role": "user", "content": "you said yes before"}],
+            "indeed I did friend",
+        ),
+    ]
+    data = normalize.build_report_data(events)
+    assert data["sessions"][0]["edges"] == []
+
+
+def test_same_span_edge_between_consecutive_calls():
+    events = [
+        _call_event(
+            "c1",
+            "2026-07-16T09:00:00+00:00",
+            [{"role": "user", "content": "step one"}],
+            "short",
+            span_id="sp9",
+        ),
+        _call_event(
+            "c2",
+            "2026-07-16T09:01:00+00:00",
+            [{"role": "user", "content": "step two"}],
+            "short",
+            span_id="sp9",
+        ),
+    ]
+    data = normalize.build_report_data(events)
+    assert {"from": "c1", "to": "c2", "kind": "same_span"} in data["sessions"][0]["edges"]
+
+
+def test_elements_list_carries_provenance_and_consumers():
+    events = _span_events("THE CHUNK TEXT", "Context:\nTHE CHUNK TEXT\nQ: hi")
+    data = normalize.build_report_data(events)
+    (element,) = data["sessions"][0]["elements"]
+    assert element["name"] == "rag_chunks"
+    assert element["source"] == "qdrant:x"
+    assert element["span_name"] == "answer_query"
+    assert element["matched"] is True
+    assert element["calls"] == ["c1"]
+
+
+def test_edge_survives_tag_split_in_consumer():
+    answer = "The webhook secret rotates every 90 days."
+    consumer = _call_event(
+        "c2",
+        "2026-07-16T09:01:00+00:00",
+        [{"role": "user", "content": "Earlier: " + answer + " Why?"}],
+        "Because policy.",
+        span_id="sp1",
+    )
+    events = _span_events("webhook secret", "unused") + [
+        _call_event(
+            "c1", "2026-07-16T09:00:30+00:00", [{"role": "user", "content": "How often?"}], answer
+        ),
+    ]
+    # the tag splits c2's message right through the echoed answer
+    events[2] = consumer  # replace the span-events template call with the consumer
+    data = normalize.build_report_data(events)
+    edges = data["sessions"][0]["edges"]
+    assert {"from": "c1", "to": "c2", "kind": "output_text"} in edges
+
+
+def test_edge_fanout_cap_sets_truncated_flag():
+    answer = "This exact sentence gets echoed everywhere downstream."
+    events = [
+        _call_event("src", "2026-07-16T08:00:00+00:00", [{"role": "user", "content": "go"}], answer)
+    ] + [
+        _call_event(
+            f"t{i:03d}",
+            f"2026-07-16T09:{i // 60:02d}:{i % 60:02d}+00:00",
+            [{"role": "user", "content": "ref: " + answer}],
+            "ok fine done today",
+        )
+        for i in range(40)
+    ]
+    data = normalize.build_report_data(events)
+    session = data["sessions"][0]
+    out_edges = [e for e in session["edges"] if e["kind"] == "output_text" and e["from"] == "src"]
+    assert len(out_edges) == 32  # capped
+    assert session["edges_truncated"] is True
+
+
+def test_same_span_chain_survives_interleaving():
+    events = [
+        _call_event(
+            "a1",
+            "2026-07-16T09:00:00+00:00",
+            [{"role": "user", "content": "one"}],
+            "short",
+            span_id="spA",
+        ),
+        _call_event(
+            "b1",
+            "2026-07-16T09:01:00+00:00",
+            [{"role": "user", "content": "two"}],
+            "short",
+            span_id="spB",
+        ),
+        _call_event(
+            "a2",
+            "2026-07-16T09:02:00+00:00",
+            [{"role": "user", "content": "three"}],
+            "short",
+            span_id="spA",
+        ),
+    ]
+    data = normalize.build_report_data(events)
+    edges = data["sessions"][0]["edges"]
+    assert {"from": "a1", "to": "a2", "kind": "same_span"} in edges
+
+
+def test_retagging_updates_element_provenance():
+    events = _span_events("THE CHUNK TEXT", "Context:\nTHE CHUNK TEXT\nQ: hi")
+    retag = dict(events[1])
+    retag["payload"] = {"name": "rag_chunks", "content": "THE CHUNK TEXT", "source": "qdrant:y"}
+    retag["timestamp"] = "2026-07-16T09:00:01.500000+00:00"
+    events.insert(2, retag)
+    data = normalize.build_report_data(events)
+    (element,) = data["sessions"][0]["elements"]
+    assert element["source"] == "qdrant:y"  # last write wins

@@ -118,3 +118,36 @@ def test_arabic_rtl_content_matches():
     assert matched == {"rag_chunks"}
     tagged = next(s for s in out if s["tagged"])
     assert tagged["content"] == chunk
+
+
+def test_mixed_array_with_scores_still_matches_strings():
+    segments = [_seg("Context: alpha doc text here")]
+    tags = [_tag("rag_chunks", json.dumps(["alpha doc text", 0.87]))]
+    out, matched = matching.apply_tags(segments, tags)
+    assert matched == {"rag_chunks"}
+
+
+def test_dict_elements_match_via_text_fields():
+    docs = [{"page_content": "delta doc body", "metadata": {"id": 1}}]
+    segments = [_seg("Context: delta doc body\nQ: hi")]
+    tags = [_tag("rag_chunks", json.dumps(docs))]
+    out, matched = matching.apply_tags(segments, tags)
+    assert matched == {"rag_chunks"}
+
+
+def test_json_escaped_nfd_element_still_matches():
+    import unicodedata
+
+    nfd = unicodedata.normalize("NFD", "café menu")
+    nfc = unicodedata.normalize("NFC", "café menu")
+    segments = [_seg("Today: " + nfc + " special")]
+    tags = [_tag("menu", json.dumps([nfd]))]  # escapes decode to NFD at parse time
+    out, matched = matching.apply_tags(segments, tags)
+    assert matched == {"menu"}
+
+
+def test_three_char_cjk_unit_matches():
+    segments = [_seg("目的地は東京都です")]
+    tags = [_tag("place", "東京都")]
+    out, matched = matching.apply_tags(segments, tags)
+    assert matched == {"place"}

@@ -13,10 +13,17 @@ import unicodedata
 _MIN_UNIT_LEN = 4  # substring units shorter than this match everywhere; ignore
 
 
+def _usable(unit: str) -> bool:
+    # 4+ chars, or 3+ when the unit contains non-ASCII (a 3-kanji chunk is
+    # already specific; 3 ASCII chars match everywhere)
+    return len(unit) >= _MIN_UNIT_LEN or (len(unit) >= 3 and any(ord(ch) > 127 for ch in unit))
+
+
 def _units(tag: dict) -> list[str]:
-    """Matchable strings for a tag: the content, or its elements when it is a
-    JSON array of strings (chunk lists are matched element-wise because apps
-    join them into one message)."""
+    """Matchable strings for a tag: the content, plus element strings when it
+    is a JSON array (chunk lists are matched element-wise because apps join
+    them into one message). Dict elements contribute their text/content/
+    page_content field, so LangChain-style document dumps work too."""
     content = unicodedata.normalize("NFC", tag.get("content") or "")
     units = [content]
     if content.lstrip().startswith("["):
@@ -24,9 +31,18 @@ def _units(tag: dict) -> list[str]:
             parsed = json.loads(content)
         except ValueError:
             parsed = None
-        if isinstance(parsed, list) and all(isinstance(x, str) for x in parsed):
-            units.extend(parsed)
-    return [u for u in units if len(u) >= _MIN_UNIT_LEN]
+        if isinstance(parsed, list):
+            for element in parsed:
+                if isinstance(element, str):
+                    units.append(element)
+                elif isinstance(element, dict):
+                    for key in ("text", "content", "page_content"):
+                        value = element.get(key)
+                        if isinstance(value, str):
+                            units.append(value)
+                            break
+    # normalize each unit: json.loads may decode escapes into non-NFC forms
+    return [unicodedata.normalize("NFC", u) for u in units if _usable(u)]
 
 
 def _find_spans(content: str, tags: list[dict]) -> list[tuple[int, int, dict]]:
