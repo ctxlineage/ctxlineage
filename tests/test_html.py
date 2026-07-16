@@ -49,6 +49,28 @@ def test_render_is_self_contained_html():
     assert out.startswith("<!DOCTYPE html>")
     assert "ctxlineage" in out
     assert "http://" not in out and "https://" not in out  # no CDN / external refs
+    # all substitution markers consumed
+    assert "/*__STYLE__*/" not in out
+    assert "/*__APP__*/" not in out
+    assert "__DATA__" not in out
+
+
+def test_render_contains_all_views_and_theme_toggle():
+    out = html.render(_data())
+    assert 'data-view="overview"' in out
+    assert 'data-view="calls"' in out
+    assert 'data-view="chain"' in out
+    assert 'id="theme"' in out
+    assert "prefers-color-scheme" in out  # OS-follow default
+    assert '[data-theme="dark"]' in out  # dark tokens present
+
+
+def test_assets_resolve_from_package():
+    from importlib import resources
+
+    base = resources.files("ctxlineage._report") / "assets"
+    for name in ("template.html", "style.css", "app.js"):
+        assert (base / name).read_text(encoding="utf-8").strip()
 
 
 def test_embedded_json_round_trips():
