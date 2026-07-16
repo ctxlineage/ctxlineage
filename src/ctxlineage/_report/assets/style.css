@@ -8,6 +8,7 @@
   --tooldef: #b08a3e; --err: #d9534a; --track: #e8edf1;
   --fn-bg: #252B33; --fn-border: #252B33; --fn-text: #e8ecf1; --fn-muted: #94a0ac;
   --edge: rgba(31, 191, 174, .75); --edge-hi: #11897d;
+  --tag1: #3BA55D; --tag2: #D0699E; --tag3: #3FA7BD; --tag4: #9A8F2B; --tag5: #C46B5A;
 }
 [data-theme="dark"] {
   --bg: #1b2026; --panel: #252B33; --text: #e8ecf1; --muted: #94a0ac;

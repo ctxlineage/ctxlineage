@@ -31,7 +31,7 @@ def test_report_json_emits_contract(demo_dir):
     assert result.exit_code == 0, result.output
     data = json.loads(result.output)
     assert data["report_version"] == 1
-    assert data["stats"]["sessions"] == 3
+    assert data["stats"]["sessions"] == 4
 
 
 def test_report_missing_dir_fails_gracefully(tmp_path):

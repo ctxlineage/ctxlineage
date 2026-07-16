@@ -10,6 +10,7 @@ Usage: python examples/generate_demo_events.py [output_dir]   (default: .ctxline
 
 from __future__ import annotations
 
+import json
 import sys
 
 from ctxlineage._events import EventWriter, make_event
@@ -276,6 +277,72 @@ def generate(directory) -> None:
         stack=["agent.py:run_step:88", "agent.py:run:31"],
         tools=tools,
     )
+
+    # Session 4: instrumented with the span/tag API — the report shows real,
+    # named segment boundaries and an honest (sub-100%) match rate: the
+    # "memory" tag is deliberately never injected into the prompt.
+    session4 = "demo-session-tagged"
+    span_id = "span-demo-tagged-1"
+    chunks4 = [CHUNKS[0], CHUNKS[4]]
+    question4 = "How do I label my RAG chunks?"
+
+    def tagged_event(event_type, payload, ts, call_id=None):
+        event = make_event(event_type, session4, payload, span_id=span_id, call_id=call_id)
+        event["timestamp"] = ts
+        writer.write(event)
+
+    tagged_event("span_start", {"name": "answer_query"}, "2026-07-16T09:10:00+00:00")
+    tagged_event(
+        "tag",
+        {"name": "app_prompt", "content": SYSTEM_PROMPT, "source": "prompts/docs_bot.txt"},
+        "2026-07-16T09:10:01+00:00",
+    )
+    tagged_event(
+        "tag",
+        {
+            "name": "rag_chunks",
+            "content": json.dumps(chunks4, ensure_ascii=False),
+            "source": "qdrant:docs_v1",
+            "transform": "top_k(2)",
+        },
+        "2026-07-16T09:10:02+00:00",
+    )
+    tagged_event(
+        "tag",
+        {"name": "memory", "content": "user prefers concise answers with citations"},
+        "2026-07-16T09:10:03+00:00",
+    )
+    answer4 = (
+        "Tag them inside a span: span.tag('rag_chunks', docs, source=...) - the report "
+        "then shows named segment boundaries [chunk-5]."
+    )
+    tagged_event(
+        "llm_call",
+        {
+            "provider": "openai",
+            "api": "chat.completions",
+            "request": {
+                "model": "gpt-4o-mini",
+                "messages": [
+                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {
+                        "role": "user",
+                        "content": "Context:\n"
+                        + "\n\n".join(chunks4)
+                        + f"\n\nQuestion: {question4}",
+                    },
+                ],
+            },
+            "stream": False,
+            "duration_ms": 780.0,
+            "call_stack": ["rag_app.py:answer_query:57", "rag_app.py:handle_turn:22"],
+            "response": _chat_response(90, answer4, 300, 34),
+            "usage": _usage(300, 34),
+        },
+        "2026-07-16T09:10:04+00:00",
+        call_id="call-demo-session-tagged-1",
+    )
+    tagged_event("span_end", {"name": "answer_query"}, "2026-07-16T09:10:05+00:00")
 
     print(f"wrote {writer.path}")
 

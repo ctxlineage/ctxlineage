@@ -22,8 +22,8 @@ def test_all_events_schema_valid(demo_events, validate_event):
         validate_event(event)
 
 
-def test_contains_three_sessions(demo_events):
-    assert len({e["session_id"] for e in demo_events}) == 3
+def test_contains_four_sessions(demo_events):
+    assert len({e["session_id"] for e in demo_events}) == 4
 
 
 def test_contains_streamed_and_error_calls(demo_events):
@@ -33,6 +33,14 @@ def test_contains_streamed_and_error_calls(demo_events):
 
 
 def test_deterministic_content(demo_events):
-    assert all(e["payload"]["provider"] == "openai" for e in demo_events)
-    models = {e["payload"]["request"].get("model") for e in demo_events}
+    calls = [e for e in demo_events if e["event_type"] == "llm_call"]
+    assert all(e["payload"]["provider"] == "openai" for e in calls)
+    models = {e["payload"]["request"].get("model") for e in calls}
     assert "gpt-4o-mini" in models
+
+
+def test_contains_tagged_span_session(demo_events):
+    kinds = {e["event_type"] for e in demo_events}
+    assert {"span_start", "tag", "span_end"} <= kinds
+    tagged_calls = [e for e in demo_events if e["event_type"] == "llm_call" and e.get("span_id")]
+    assert tagged_calls

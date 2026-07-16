@@ -12,13 +12,23 @@ const SEG_LABEL = { system: "app · instructions", user: "user input",
                     assistant: "llm output (prev)", tool: "tool / MCP",
                     tool_defs: "tool definitions" };
 const CHIP_LABEL = { system: "app", user: "user", assistant: "llm out", tool_defs: "tool defs" };
-const kindColor = (k) => `var(${KIND[k] ?? "--muted"})`;
-const segLabel = (g) =>
-  g.kind === "tool" && g.name ? `tool / MCP · ${g.name}` : (SEG_LABEL[g.kind] ?? g.kind);
+const TAG_VARS = ["--tag1", "--tag2", "--tag3", "--tag4", "--tag5"];
+const kindColor = (k) => {
+  if (KIND[k]) return `var(${KIND[k]})`;
+  let h = 0;
+  for (const ch of String(k)) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
+  return `var(${TAG_VARS[h % TAG_VARS.length]})`;
+};
+const segLabel = (g) => {
+  if (g.kind === "tool" && g.name) return `tool / MCP · ${g.name}`;
+  if (SEG_LABEL[g.kind]) return SEG_LABEL[g.kind];
+  return g.source ? `${g.kind} · ${g.source}` : g.kind;  // tag-named segment
+};
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) =>
   ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 const fmt = (n) => (n == null ? "–" : n.toLocaleString("en-US"));
 const stepOf = (c) => {
+  if (c.step) return c.step;  // span name wins
   const frame = c.call_stack && c.call_stack[0];
   if (!frame) return null;
   const parts = frame.split(":");
@@ -136,6 +146,10 @@ function renderOverview() {
       ${stat(fmt(totalTok), "total tokens")}
       ${stat(fmt(promptTok) + " / " + fmt(outTok), "input / output tok")}
       ${stat(fmt(data.stats.errors), "errors", data.stats.errors ? "errn" : "")}
+      ${data.stats.tags && data.stats.tags.total
+        ? stat((data.stats.tags.match_rate * 100).toFixed(0) + "%",
+               `tag match rate (${data.stats.tags.matched}/${data.stats.tags.total})`)
+        : ""}
     </div>
     <h4>views</h4>
     <div class="guides">
@@ -244,7 +258,7 @@ function renderCallDetail() {
     ${windowbar}
     <div class="flow">
       <div class="col"><h4>input — context</h4>${segs}
-        <div class="hint">user input may contain app-injected context (RAG, templates) — the tag API will split and attribute it</div></div>
+        ${c.segments.some((g) => g.tagged) ? "" : '<div class="hint">user input may contain app-injected context (RAG, templates) — tag it with the span API to split and attribute it</div>'}</div>
       <div class="arrow">→</div>
       <div class="col"><h4>fn — step + model + instructions</h4>${fn}</div>
       <div class="arrow">→</div>
