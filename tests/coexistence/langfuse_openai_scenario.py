@@ -40,9 +40,12 @@ server = ThreadingHTTPServer(("127.0.0.1", 0), _SinkHandler)
 threading.Thread(target=server.serve_forever, daemon=True).start()
 
 # Must be set before anything langfuse is imported; dummy keys keep the
-# wrapper fully active, the host points its exporter at the sink above.
+# wrapper fully active, the base URL points its exporter at the sink above.
+# LANGFUSE_BASE_URL outranks LANGFUSE_HOST in langfuse v4 and HOST is already
+# deprecated — set both so neither env drift nor v5 can retarget the export.
 os.environ["LANGFUSE_PUBLIC_KEY"] = "pk-lf-test"
 os.environ["LANGFUSE_SECRET_KEY"] = "sk-lf-test"
+os.environ["LANGFUSE_BASE_URL"] = f"http://127.0.0.1:{server.server_port}"
 os.environ["LANGFUSE_HOST"] = f"http://127.0.0.1:{server.server_port}"
 os.environ["NO_PROXY"] = "127.0.0.1"
 
@@ -168,13 +171,18 @@ for path, headers, body in received:
     except Exception as exc:  # decoding problems must fail the parent assert loudly
         decode_errors.append(repr(exc))
 
+expected_output = "Hello world" if MODE == "stream" else "Hello there!"
+# Unique marker: atexit hooks (langfuse/OTel shutdown) may print after us, so
+# the parent greps for this prefix instead of trusting the last stdout line.
 print(
-    json.dumps(
+    "CTXL_RESULT: "
+    + json.dumps(
         {
             "response_text": response_text,
             "ctx_events": ctx_events,
             "langfuse_span_count": span_count,
             "langfuse_saw_input": "Say hello" in attr_blob,
+            "langfuse_saw_output": expected_output in attr_blob,
             "sink_paths": sorted({p for p, _, _ in received}),
             "decode_errors": decode_errors,
         }

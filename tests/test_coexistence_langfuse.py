@@ -7,6 +7,7 @@ itself; it reports both sides' captures as JSON and the assertions live here.
 """
 
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -14,6 +15,20 @@ from pathlib import Path
 import pytest
 
 SCENARIO = Path(__file__).parent / "coexistence" / "langfuse_openai_scenario.py"
+RESULT_MARKER = "CTXL_RESULT: "
+
+# A developer's real env must not reach the scenario: LANGFUSE_BASE_URL would
+# outrank the scenario's sink URL (sending test payloads to a real host),
+# OPENAI_BASE_URL would redirect the mocked call, proxies break the local sink.
+_STRIPPED_PREFIXES = ("LANGFUSE_", "OPENAI_", "ANTHROPIC_", "OTEL_", "CTXLINEAGE")
+
+
+def _sanitized_env() -> dict:
+    return {
+        key: value
+        for key, value in os.environ.items()
+        if not key.upper().startswith(_STRIPPED_PREFIXES) and "PROXY" not in key.upper()
+    }
 
 
 def _run_scenario(order: str, mode: str, events_dir: Path) -> dict:
@@ -23,9 +38,16 @@ def _run_scenario(order: str, mode: str, events_dir: Path) -> dict:
         text=True,
         timeout=120,
         cwd=events_dir,
+        env=_sanitized_env(),
     )
     assert proc.returncode == 0, f"scenario crashed:\n{proc.stderr}"
-    return json.loads(proc.stdout.strip().splitlines()[-1])
+    results = [
+        line.removeprefix(RESULT_MARKER)
+        for line in proc.stdout.splitlines()
+        if line.startswith(RESULT_MARKER)
+    ]
+    assert len(results) == 1, f"expected one result line, stdout was:\n{proc.stdout}"
+    return json.loads(results[0])
 
 
 @pytest.mark.parametrize("order", ["ctxlineage-first", "langfuse-first"])
@@ -50,7 +72,10 @@ def test_coexists_with_langfuse_openai_dropin(tmp_path, order, mode):
         assert payload["response"]["choices"][0]["message"]["content"] == "Hello there!"
         assert payload["usage"]["total_tokens"] == 12
 
-    # langfuse side: still exports spans that saw the request content
+    # langfuse side: exactly one span (>1 would be double-counting, the #26
+    # failure mode) that saw both the request and the (assembled) response —
+    # i.e. our proxy did not starve langfuse's own stream accumulation.
     assert result["decode_errors"] == []
-    assert result["langfuse_span_count"] >= 1, result
+    assert result["langfuse_span_count"] == 1, result
     assert result["langfuse_saw_input"], result
+    assert result["langfuse_saw_output"], result
