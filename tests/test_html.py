@@ -57,6 +57,7 @@ def test_render_is_self_contained_html():
 
 def test_render_contains_all_views_and_theme_toggle():
     out = html.render(_data())
+    assert 'id="filter"' in out  # client-side search box
     assert 'data-view="overview"' in out
     assert 'data-view="calls"' in out
     assert 'data-view="chain"' in out

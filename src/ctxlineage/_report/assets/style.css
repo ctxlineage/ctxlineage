@@ -36,6 +36,12 @@ header .stats { color: #94a0ac; font-size: 12.5px; }
 .layout { display: grid; grid-template-columns: 280px 1fr; min-height: calc(100vh - 49px); }
 [data-view="chain"] .layout { grid-template-columns: 240px 1fr; }
 nav { border-right: 1px solid var(--border); padding: 12px 0; overflow-y: auto; }
+.filterwrap { padding: 2px 14px 6px; }
+#filter { width: 100%; padding: 6px 10px; border-radius: 6px; border: 1px solid var(--border);
+          background: var(--panel); color: var(--text); font-size: 12.5px; }
+#filter:focus { outline: none; border-color: var(--teal); }
+.fcount { font-size: 11px; color: var(--muted); margin-top: 4px; min-height: 14px; }
+.node.dim { opacity: .3; }
 nav h3 { font-size: 11px; letter-spacing: .08em; text-transform: uppercase;
          color: var(--muted); margin: 14px 16px 6px; }
 main { padding: 20px 24px 40px; overflow-y: auto; position: relative; }

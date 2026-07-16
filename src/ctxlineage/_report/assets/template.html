@@ -19,7 +19,14 @@
   <button id="theme" aria-label="toggle color theme">☾ dark</button>
 </header>
 <div class="layout">
-  <nav id="nav" aria-label="sessions and calls"></nav>
+  <nav aria-label="sessions and calls">
+    <div class="filterwrap">
+      <input id="filter" type="search" placeholder="filter — model, step, text… ( / )"
+             autocomplete="off" spellcheck="false">
+      <div class="fcount" id="fcount"></div>
+    </div>
+    <div id="navlist"></div>
+  </nav>
   <main id="main"></main>
 </div>
 <script type="application/json" id="ctxlineage-data">__DATA__</script>
