@@ -14,6 +14,7 @@ the anatomy of every context window, and the lineage of every context element.
 **No server, no database, no account. Your prompts never leave your machine.**
 
 [![CI](https://img.shields.io/github/actions/workflow/status/ctxlineage/ctxlineage/test.yml?branch=main&style=flat-square&logo=githubactions&logoColor=white&label=CI)](https://github.com/ctxlineage/ctxlineage/actions/workflows/test.yml)
+[![Coverage](https://img.shields.io/codecov/c/github/ctxlineage/ctxlineage?style=flat-square&logo=codecov&logoColor=white)](https://codecov.io/gh/ctxlineage/ctxlineage)
 [![PyPI](https://img.shields.io/pypi/v/ctxlineage?style=flat-square&logo=pypi&logoColor=white)](https://pypi.org/project/ctxlineage/)
 [![Python](https://img.shields.io/badge/python-3.10%2B-3776AB?style=flat-square&logo=python&logoColor=white)](pyproject.toml)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue?style=flat-square)](LICENSE)
