@@ -90,8 +90,10 @@ honestly-untagged, with the match rate displayed — never fabricated).
 
 Designed as a **per-run, dev-time artifact**. Comfortable up to ~5,000 calls
 (~15 MB report); usable to ~20,000 calls (~65 MB). Reports contain full prompt
-text — treat them like logs with sensitive data (see [SECURITY.md](SECURITY.md);
-`--redact` lands in v0.1.0).
+text — treat them like logs with sensitive data (see [SECURITY.md](SECURITY.md)).
+Before sharing, mask secrets with `ctxlineage report --redact "sk-[A-Za-z0-9]+"`
+(repeatable regex; the report discloses what was redacted), or keep them out of
+the log entirely with `ctxlineage.init(redact_fields=["request.messages.content"])`.
 
 ## Status
 

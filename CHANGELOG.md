@@ -22,3 +22,12 @@ land in minor versions).
   match rate; lineage edge inference (output→input, same-span) computed in
   the report backend.
 - Coexistence test matrix with the Langfuse OpenAI drop-in.
+- **Redaction**: `ctxlineage report --redact PATTERN` (repeatable regex;
+  applied after matching so stats stay honest, disclosed in the report) and
+  capture-side `ctxlineage.init(redact_fields=[...])` field masking (secrets
+  never reach `events.jsonl`).
+- Read-only **MCP server** (`ctxlineage[mcp]` extra, `ctxlineage-mcp` entry
+  point): list_sessions / get_call / get_lineage / generate_report over the
+  same JSONL.
+- Runnable examples (`examples/rag_app.py`, `examples/agent_app.py`, both
+  with a keyless `--mock` mode) and a `ctxlineage-instrument` agent skill.

@@ -15,6 +15,7 @@ issues.
 
 Generated reports embed **full prompt and response text** by design. Treat
 `ctxlineage-report.html` and `.ctxlineage/events.jsonl` like logs containing
-sensitive data: redact before sharing (`ctxlineage report --redact` lands in
-v0.1.0) and keep them out of version control (the default directory is
-gitignored by `ctxlineage init` documentation guidance).
+sensitive data: redact before sharing (`ctxlineage report --redact "pattern"`,
+repeatable) or keep secrets out of the log entirely with
+`ctxlineage.init(redact_fields=[...])`, and keep both files out of version
+control (add `.ctxlineage/` to your `.gitignore`).

@@ -9,6 +9,7 @@ from ctxlineage._events import EventWriter, make_event, new_id
 
 _writer: EventWriter | None = None
 _session_id: str | None = None
+_redact_fields: list[str] = []
 _warned_keys: set[str] = set()
 
 
@@ -20,17 +21,29 @@ def warn_once(key: str, message: str) -> None:
     warnings.warn(message, RuntimeWarning, stacklevel=3)
 
 
-def init(directory: str | os.PathLike | None = None) -> None:
+def init(
+    directory: str | os.PathLike | None = None,
+    *,
+    redact_fields: list[str] | None = None,
+) -> None:
     """Start capturing LLM calls to <directory>/events.jsonl.
 
     Directory resolution: argument > CTXLINEAGE_DIR env var > ./.ctxlineage.
     Safe to call more than once; the first call wins (one session per process).
+
+    redact_fields: dotted payload paths (e.g. "request.messages.content")
+    whose values are replaced with "[redacted]" before events are written —
+    the masked content never reaches disk. A list mid-path applies the rest
+    of the path to every item. Note this is irreversible and blinds segment
+    matching for the masked text; prefer `ctxlineage report --redact` unless
+    the log itself must stay clean.
     """
-    global _writer, _session_id
+    global _writer, _session_id, _redact_fields
     if _writer is None:
         resolved = directory or os.environ.get("CTXLINEAGE_DIR") or ".ctxlineage"
         _writer = EventWriter(resolved)
         _session_id = new_id()
+        _redact_fields = list(redact_fields or [])
     try:
         from ctxlineage._instrument import install
     except ImportError:  # instrumentation package not present (build subset)
@@ -63,6 +76,19 @@ def emit(event_type: str, payload: dict, *, call_id: str | None = None, span_id=
         from ctxlineage import _span  # emit-time import avoids a module cycle
 
         span_id = _span.current_id()
+    if _redact_fields:
+        from ctxlineage import _redact
+
+        try:
+            payload = _redact.mask_payload(payload, _redact_fields)
+        except Exception as exc:
+            # writing the unmasked event would leak what the user asked to
+            # hide — dropping the event is the lesser failure
+            warn_once(
+                "redact",
+                f"ctxlineage: failed to redact event ({exc!r}); event dropped",
+            )
+            return False
     try:
         _writer.write(
             make_event(event_type, _session_id, payload, span_id=span_id, call_id=call_id)
@@ -78,7 +104,8 @@ def emit(event_type: str, payload: dict, *, call_id: str | None = None, span_id=
 
 def _reset() -> None:
     """Test helper: forget writer/session. Cannot un-patch SDKs."""
-    global _writer, _session_id
+    global _writer, _session_id, _redact_fields
     _writer = None
     _session_id = None
+    _redact_fields = []
     _warned_keys.clear()
