@@ -8,6 +8,7 @@
   --tooldef: #b08a3e; --err: #d9534a; --track: #e8edf1;
   --fn-bg: #252B33; --fn-border: #252B33; --fn-text: #e8ecf1; --fn-muted: #94a0ac;
   --edge: rgba(31, 191, 174, .75); --edge-hi: #11897d;
+  --tag1: #3BA55D; --tag2: #D0699E; --tag3: #3FA7BD; --tag4: #9A8F2B; --tag5: #C46B5A;
 }
 [data-theme="dark"] {
   --bg: #1b2026; --panel: #252B33; --text: #e8ecf1; --muted: #94a0ac;
@@ -90,6 +91,7 @@ main { padding: 20px 24px 40px; overflow-y: auto; position: relative; }
 .seg .full { display: none; margin-top: 8px; font: 12px/1.5 ui-monospace, monospace;
              white-space: pre-wrap; word-break: break-word; max-height: 260px; overflow-y: auto;
              border-top: 1px dashed var(--border); padding-top: 8px; }
+.seg.ws .preview, .seg.ws .full { font-style: italic; color: var(--muted); }
 .seg.open .full { display: block; }
 .seg.open .preview { display: none; }
 .hint { font-size: 11.5px; color: var(--muted); margin-top: 4px; }

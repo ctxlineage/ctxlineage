@@ -12,13 +12,29 @@ const SEG_LABEL = { system: "app · instructions", user: "user input",
                     assistant: "llm output (prev)", tool: "tool / MCP",
                     tool_defs: "tool definitions" };
 const CHIP_LABEL = { system: "app", user: "user", assistant: "llm out", tool_defs: "tool defs" };
-const kindColor = (k) => `var(${KIND[k] ?? "--muted"})`;
-const segLabel = (g) =>
-  g.kind === "tool" && g.name ? `tool / MCP · ${g.name}` : (SEG_LABEL[g.kind] ?? g.kind);
+const TAG_VARS = ["--tag1", "--tag2", "--tag3", "--tag4", "--tag5"];
+const kindColor = (k) => {
+  if (KIND[k]) return `var(${KIND[k]})`;
+  let h = 0;
+  for (const ch of String(k)) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
+  return `var(${TAG_VARS[h % TAG_VARS.length]})`;
+};
+const segLabel = (g) => {
+  if (g.kind === "tool" && g.name) return `tool / MCP · ${g.name}`;
+  if (SEG_LABEL[g.kind]) return SEG_LABEL[g.kind];
+  return g.source ? `${g.kind} · ${g.source}` : g.kind;  // tag-named segment
+};
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) =>
   ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 const fmt = (n) => (n == null ? "–" : n.toLocaleString("en-US"));
+const clip = (t, n) => {
+  let s = String(t).slice(0, n);
+  const last = s.charCodeAt(s.length - 1);
+  if (last >= 0xd800 && last <= 0xdbff) s = s.slice(0, -1);  // no torn emoji
+  return s;
+};
 const stepOf = (c) => {
+  if (c.step) return c.step;  // span name wins
   const frame = c.call_stack && c.call_stack[0];
   if (!frame) return null;
   const parts = frame.split(":");
@@ -136,6 +152,10 @@ function renderOverview() {
       ${stat(fmt(totalTok), "total tokens")}
       ${stat(fmt(promptTok) + " / " + fmt(outTok), "input / output tok")}
       ${stat(fmt(data.stats.errors), "errors", data.stats.errors ? "errn" : "")}
+      ${data.stats.tags && data.stats.tags.total
+        ? stat((data.stats.tags.match_rate * 100).toFixed(0) + "%",
+               `tag match rate (${data.stats.tags.matched}/${data.stats.tags.total})`)
+        : ""}
     </div>
     <h4>views</h4>
     <div class="guides">
@@ -192,8 +212,9 @@ function renderCallDetail() {
   const total = c.segments.reduce((a, g) => a + g.tokens_est, 0) || 1;
   const inTok = c.usage ? c.usage.prompt_tokens : c.input_tokens_est;
   const pct = c.context_window ? (100 * inTok / c.context_window) : null;
-  const sys = c.segments.filter((g) => g.kind === "system");
-  const rest = c.segments.filter((g) => g.kind !== "system");
+  // role (not kind): a tagged system prompt stays in the fn card, with provenance
+  const sys = c.segments.filter((g) => g.role === "system");
+  const rest = c.segments.filter((g) => g.role !== "system");
 
   const winSegs = c.segments.map((g) =>
     `<i style="width:${(100 * g.tokens_est / total).toFixed(2)}%;background:${kindColor(g.kind)}"></i>`).join("");
@@ -205,18 +226,24 @@ function renderCallDetail() {
         ? `<i style="width:${Math.max(pct, 0.6)}%;display:flex;overflow:hidden">${winSegs}</i>` : winSegs}</div>
     </div>`;
 
-  const segs = rest.map((g) => `
-    <div class="seg" style="border-left-color:${kindColor(g.kind)}">
+  const segs = rest.map((g) => {
+    const ws = !g.content.trim();
+    return `
+    <div class="seg ${ws ? "ws" : ""}" style="border-left-color:${kindColor(g.kind)}">
       <div class="top"><span class="kind" style="color:${kindColor(g.kind)}">${esc(segLabel(g))}</span>
         <span class="share">${fmt(g.tokens_est)} tok · ${(100 * g.tokens_est / total).toFixed(0)}%</span></div>
-      <div class="preview">${esc(g.content.slice(0, 90))}</div>
-      <div class="full">${esc(g.content)}</div>
-    </div>`).join("");
+      <div class="preview" dir="auto">${ws ? "(whitespace separator)" : esc(clip(g.content, 90))}</div>
+      <div class="full" dir="auto">${ws ? "(whitespace only — separates the surrounding segments)" : esc(g.content)}</div>
+    </div>`;
+  }).join("");
 
   const sysTok = sys.reduce((a, g) => a + g.tokens_est, 0);
   const instr = sys.length ? `
     <div class="instr" id="instr">
-      <div class="lbl"><span>instructions</span><span>${fmt(sysTok)} tok · ${(100 * sysTok / total).toFixed(0)}% of input</span></div>
+      <div class="lbl"><span>instructions${
+        (() => { const t = [...new Set(sys.filter((g) => g.tagged).map((g) => segLabel(g)))];
+                 return t.length ? " — " + esc(t.join(" + ")) : ""; })()
+      }</span><span>${fmt(sysTok)} tok · ${(100 * sysTok / total).toFixed(0)}% of input</span></div>
       <div class="txt">${esc(sys.map((g) => g.content).join("\n\n"))}</div>
     </div>` : "";
 
@@ -236,7 +263,7 @@ function renderCallDetail() {
        <div class="body">${esc(c.error.message)}</div></div>`
     : `<div class="out"><div class="head"><span class="ol">llm output</span>
          <span>${c.usage ? fmt(c.usage.completion_tokens) + " tok · " : ""}${esc(c.output && c.output.finish_reason || "")}</span></div>
-       <div class="body">${esc(c.output ? c.output.content : "")}</div></div>`;
+       <div class="body" dir="auto">${esc(c.output ? c.output.content : "")}</div></div>`;
 
   main.innerHTML = `
     <div class="callhead"><h2>call ${selCall + 1}</h2>
@@ -244,7 +271,7 @@ function renderCallDetail() {
     ${windowbar}
     <div class="flow">
       <div class="col"><h4>input — context</h4>${segs}
-        <div class="hint">user input may contain app-injected context (RAG, templates) — the tag API will split and attribute it</div></div>
+        ${c.segments.some((g) => g.tagged) ? "" : '<div class="hint">user input may contain app-injected context (RAG, templates) — tag it with the span API to split and attribute it</div>'}</div>
       <div class="arrow">→</div>
       <div class="col"><h4>fn — step + model + instructions</h4>${fn}</div>
       <div class="arrow">→</div>
@@ -329,7 +356,7 @@ function chainNodeHtml(sess, c, i, targets, downstream) {
        <div class="p">${esc(c.error.type)}: ${esc(c.error.message)}</div></div>`
     : `<div class="outchip ${hiFrom === i ? "hi" : ""}" data-i="${i}">
        <div class="t"><b>output</b><span>${ds} ${c.usage ? fmt(c.usage.completion_tokens) + " tok" : ""}</span></div>
-       <div class="p">${esc(c.output ? c.output.content : "")}</div></div>`;
+       <div class="p" dir="auto">${esc(c.output ? c.output.content : "")}</div></div>`;
   return `<div class="node ${targets.includes(i) ? "hi-target" : ""}${query && !callMatches(sess, c) ? " dim" : ""}" data-n="${i}">
     <span class="nlabel">${i + 1}</span>
     <div><div class="chips">${chips}</div><div class="minibar">${minibar}</div></div>

@@ -11,6 +11,7 @@ import os
 from datetime import datetime, timezone
 from pathlib import Path
 
+from ctxlineage._report.matching import apply_tags
 from ctxlineage._report.tokens import estimate_tokens
 
 REPORT_VERSION = 1
@@ -140,7 +141,7 @@ def _responses_output(response) -> dict | None:
     return {"content": "\n".join(texts), "finish_reason": None}
 
 
-def _normalize_call(event: dict) -> dict:
+def _normalize_call(event: dict, span_names=None, span_tags=None) -> tuple[dict, set]:
     payload = event.get("payload") or {}
     api = payload.get("api", "")
     request = payload.get("request") or {}
@@ -151,6 +152,11 @@ def _normalize_call(event: dict) -> dict:
     else:
         segments = _chat_segments(request)
         output = None if "error" in payload else _chat_output(payload.get("response"))
+    span_id = event.get("span_id")
+    tags = (span_tags or {}).get(span_id, [])
+    matched: set = set()
+    if tags:
+        segments, matched = apply_tags(segments, tags)
     tools = request.get("tools")
     if tools:
         # Tool/function definitions are serialized into the prompt and consume
@@ -165,9 +171,10 @@ def _normalize_call(event: dict) -> dict:
     for index, segment in enumerate(segments):
         segment["index"] = index
         segment["tokens_est"] = estimate_tokens(segment["content"], model or "")
-    return {
+    call = {
         "id": event.get("call_id"),
-        "span_id": event.get("span_id"),
+        "span_id": span_id,
+        "step": (span_names or {}).get(span_id),
         "timestamp": event.get("timestamp"),
         "provider": payload.get("provider"),
         "api": api,
@@ -179,21 +186,38 @@ def _normalize_call(event: dict) -> dict:
         "usage": payload.get("usage"),
         "segments": segments,
         "input_tokens_est": sum(s["tokens_est"] for s in segments),
+        "tagged_tokens_est": sum(s["tokens_est"] for s in segments if s.get("tagged")),
         "output": output,
         "call_stack": payload.get("call_stack") or [],
     }
+    return call, matched
 
 
 def build_report_data(events: list[dict]) -> dict:
+    span_names: dict = {}
+    span_tags: dict = {}
+    for event in events:
+        kind = event.get("event_type")
+        span_id = event.get("span_id")
+        payload = event.get("payload") or {}
+        if kind == "span_start" and span_id:
+            span_names[span_id] = payload.get("name")
+        elif kind == "tag" and span_id:
+            span_tags.setdefault(span_id, []).append(payload)
+
     sessions: dict[str, list[dict]] = {}
     errors = 0
+    matched_tags: set = set()
     for event in events:
         if event.get("event_type") != "llm_call":
-            continue  # tag/span events are M3 input; ignored by the M2 report
-        call = _normalize_call(event)
+            continue
+        call, matched = _normalize_call(event, span_names, span_tags)
+        matched_tags.update((event.get("span_id"), name) for name in matched)
         if call["error"]:
             errors += 1
         sessions.setdefault(event.get("session_id", "unknown"), []).append(call)
+
+    all_tags = {(sid, t.get("name")) for sid, tags in span_tags.items() for t in tags}
 
     session_list = []
     for session_id, calls in sessions.items():
@@ -208,6 +232,8 @@ def build_report_data(events: list[dict]) -> dict:
         )
     session_list.sort(key=lambda s: s["started_at"] or "")
 
+    tags_total = len(all_tags)
+    tags_matched = len(matched_tags & all_tags)
     return {
         "report_version": REPORT_VERSION,
         "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -215,6 +241,11 @@ def build_report_data(events: list[dict]) -> dict:
             "sessions": len(session_list),
             "calls": sum(len(s["calls"]) for s in session_list),
             "errors": errors,
+            "tags": {
+                "total": tags_total,
+                "matched": tags_matched,
+                "match_rate": round(tags_matched / tags_total, 4) if tags_total else None,
+            },
         },
         "sessions": session_list,
     }

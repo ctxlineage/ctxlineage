@@ -66,7 +66,12 @@ def test_groups_and_sorts_sessions():
     ]
     data = normalize.build_report_data(events)
     assert data["report_version"] == 1
-    assert data["stats"] == {"sessions": 2, "calls": 3, "errors": 0}
+    assert data["stats"] == {
+        "sessions": 2,
+        "calls": 3,
+        "errors": 0,
+        "tags": {"total": 0, "matched": 0, "match_rate": None},
+    }
     assert [s["id"] for s in data["sessions"]] == ["s1", "s2"]
     s1 = data["sessions"][0]
     assert [c["id"] for c in s1["calls"]] == ["c1", "c2"]
@@ -216,7 +221,7 @@ def test_end_to_end_with_demo_data(tmp_path):
     events, skipped = normalize.load_events(tmp_path / "events.jsonl")
     data = normalize.build_report_data(events)
     assert skipped == 0
-    assert data["stats"]["sessions"] == 3
+    assert data["stats"]["sessions"] == 4
     assert data["stats"]["errors"] == 1
     rag = next(s for s in data["sessions"] if s["id"] == "demo-session-rag")
     assert len(rag["calls"]) == 6
@@ -224,3 +229,66 @@ def test_end_to_end_with_demo_data(tmp_path):
     kinds = [s["kind"] for s in last_answer_call["segments"]]
     assert kinds[0] == "system"
     assert "assistant" in kinds  # history accumulated
+
+
+def _span_events(tag_content, message, span_id="sp1"):
+    return [
+        {
+            "schema_version": 1,
+            "event_type": "span_start",
+            "session_id": "s1",
+            "span_id": span_id,
+            "call_id": None,
+            "timestamp": "2026-07-16T09:00:00+00:00",
+            "payload": {"name": "answer_query"},
+        },
+        {
+            "schema_version": 1,
+            "event_type": "tag",
+            "session_id": "s1",
+            "span_id": span_id,
+            "call_id": None,
+            "timestamp": "2026-07-16T09:00:01+00:00",
+            "payload": {"name": "rag_chunks", "content": tag_content, "source": "qdrant:x"},
+        },
+        {
+            "schema_version": 1,
+            "event_type": "llm_call",
+            "session_id": "s1",
+            "span_id": span_id,
+            "call_id": "c1",
+            "timestamp": "2026-07-16T09:00:02+00:00",
+            "payload": {
+                "provider": "openai",
+                "api": "chat.completions",
+                "request": {
+                    "model": "gpt-4o-mini",
+                    "messages": [{"role": "user", "content": message}],
+                },
+                "stream": False,
+                "duration_ms": 10.0,
+                "call_stack": ["app.py:main:1"],
+            },
+        },
+    ]
+
+
+def test_tagged_call_gets_named_segments_and_step():
+    events = _span_events("THE CHUNK TEXT", "Context:\nTHE CHUNK TEXT\nQ: hi")
+    data = normalize.build_report_data(events)
+    call = data["sessions"][0]["calls"][0]
+    assert call["step"] == "answer_query"
+    kinds = [(s["kind"], s.get("tagged")) for s in call["segments"]]
+    assert ("rag_chunks", True) in kinds
+    tagged = next(s for s in call["segments"] if s.get("tagged"))
+    assert tagged["source"] == "qdrant:x"
+    assert call["tagged_tokens_est"] > 0
+    assert data["stats"]["tags"] == {"total": 1, "matched": 1, "match_rate": 1.0}
+
+
+def test_unmatched_tag_lowers_match_rate():
+    events = _span_events("text that appears nowhere at all", "Q: hi there friend")
+    data = normalize.build_report_data(events)
+    call = data["sessions"][0]["calls"][0]
+    assert all(not s.get("tagged") for s in call["segments"])
+    assert data["stats"]["tags"]["match_rate"] == 0.0

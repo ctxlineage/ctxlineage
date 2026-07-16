@@ -122,3 +122,12 @@ def test_stream_consumed_after_span_exit_keeps_span_id(capture, openai_client, c
     list(stream)  # consumed after the span closed
     calls = [e for e in capture() if e["event_type"] == "llm_call"]
     assert calls[0]["span_id"] == sp.span_id
+
+
+def test_japanese_tag_content_round_trips(capture):
+    with ctxlineage.span("回答") as sp:
+        sp.tag("rag_chunks", ["日本語のチャンク🎌"], source="qdrant:jp")
+    (tag,) = [e for e in capture() if e["event_type"] == "tag"]
+    assert json.loads(tag["payload"]["content"]) == ["日本語のチャンク🎌"]
+    starts = [e for e in capture() if e["event_type"] == "span_start"]
+    assert starts[0]["payload"]["name"] == "回答"

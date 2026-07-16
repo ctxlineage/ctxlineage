@@ -33,4 +33,28 @@ def estimate_tokens(text: str, model: str) -> int:
             return len(encoding.encode(text, disallowed_special=()))
     except Exception:
         pass
-    return max(1, len(text) // 4)
+    return _fallback_estimate(text)
+
+
+_CJK_RANGES = (
+    (0x3040, 0x30FF),  # hiragana / katakana
+    (0x3400, 0x4DBF),  # CJK ext A
+    (0x4E00, 0x9FFF),  # CJK unified
+    (0xAC00, 0xD7AF),  # hangul
+    (0xF900, 0xFAFF),  # CJK compat
+)
+
+
+def _fallback_estimate(text: str) -> int:
+    # offline heuristic, tiered by script: ~4 ASCII chars/token, ~1 token per
+    # CJK char, ~2 chars/token for other non-ASCII (Cyrillic, Arabic, accents…)
+    ascii_chars = cjk = other = 0
+    for ch in text:
+        cp = ord(ch)
+        if cp < 128:
+            ascii_chars += 1
+        elif any(lo <= cp <= hi for lo, hi in _CJK_RANGES):
+            cjk += 1
+        else:
+            other += 1
+    return max(1, ascii_chars // 4 + cjk + other // 2)
