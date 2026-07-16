@@ -1,0 +1,341 @@
+/* ctxlineage report app — hand-written vanilla JS, no build step (PLAN.md §6).
+   Reads the embedded report_version:1 JSON and renders two views:
+   Calls (per-call anatomy: input segments → fn → output) and Chain (session flow). */
+"use strict";
+
+const data = JSON.parse(document.getElementById("ctxlineage-data").textContent);
+
+/* ---------- shared vocabulary ---------- */
+const KIND = { system: "--sys", user: "--user", assistant: "--assistant",
+               tool: "--tool", tool_defs: "--tooldef" };
+const SEG_LABEL = { system: "app · instructions", user: "user input",
+                    assistant: "llm output (prev)", tool: "tool / MCP",
+                    tool_defs: "tool definitions" };
+const CHIP_LABEL = { system: "app", user: "user", assistant: "llm out", tool_defs: "tool defs" };
+const kindColor = (k) => `var(${KIND[k] ?? "--muted"})`;
+const segLabel = (g) =>
+  g.kind === "tool" && g.name ? `tool / MCP · ${g.name}` : (SEG_LABEL[g.kind] ?? g.kind);
+const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) =>
+  ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const fmt = (n) => (n == null ? "–" : n.toLocaleString("en-US"));
+const stepOf = (c) => {
+  const frame = c.call_stack && c.call_stack[0];
+  if (!frame) return null;
+  const parts = frame.split(":");
+  return parts.length >= 2 ? parts[1] : null;
+};
+
+/* ---------- state ---------- */
+let view = "calls";
+let selCall = 0;
+let selSession = 0;
+let hiFrom = null;
+
+const calls = [];
+data.sessions.forEach((s, si) => s.calls.forEach((c) => calls.push({ s, si, c })));
+
+document.getElementById("stats").textContent =
+  `${data.stats.calls} calls · ${data.stats.sessions} sessions · ${data.stats.errors} errors`;
+
+/* ---------- theme: follow OS, manual toggle persisted ---------- */
+const themeBtn = document.getElementById("theme");
+let theme = localStorage.getItem("ctxlineage-theme") ??
+  (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+function applyTheme() {
+  document.body.dataset.theme = theme;
+  themeBtn.textContent = theme === "dark" ? "☀ light" : "☾ dark";
+  if (view === "chain") drawEdges();
+}
+themeBtn.addEventListener("click", () => {
+  theme = theme === "dark" ? "light" : "dark";
+  localStorage.setItem("ctxlineage-theme", theme);
+  applyTheme();
+});
+
+/* ---------- tabs ---------- */
+document.querySelectorAll(".tab").forEach((t) =>
+  t.addEventListener("click", () => {
+    if (view === t.dataset.view) return;
+    view = t.dataset.view;
+    if (view === "chain" && calls[selCall]) selSession = calls[selCall].si;
+    hiFrom = null;
+    render();
+  }));
+
+/* ================= calls view (anatomy) ================= */
+
+function renderCallsNav() {
+  let h = "";
+  data.sessions.forEach((s) => {
+    h += `<h3>${esc(s.id)}</h3>`;
+    s.calls.forEach((c) => {
+      const i = calls.findIndex((x) => x.c === c);
+      const tok = c.usage ? fmt(c.usage.total_tokens) + " tok" : "–";
+      h += `<div class="callrow ${i === selCall ? "sel" : ""}" data-i="${i}">
+        <span class="n">${i + 1}</span>
+        <span class="m"><span class="model">${esc(c.model)}</span>
+          <div class="sub">${esc((c.timestamp ?? "").slice(11, 19))} · ${tok}</div></span>
+        ${c.stream ? '<span class="badge stream">stream</span>' : ""}
+        ${c.error ? '<span class="badge err">error</span>' : ""}</div>`;
+    });
+  });
+  const nav = document.getElementById("nav");
+  nav.innerHTML = h;
+  nav.querySelectorAll(".callrow").forEach((el) =>
+    el.addEventListener("click", () => { selCall = +el.dataset.i; render(); }));
+}
+
+function renderCallDetail() {
+  const main = document.getElementById("main");
+  if (!calls.length) {
+    main.innerHTML = '<div class="empty">No LLM calls recorded yet.</div>';
+    return;
+  }
+  const { c } = calls[selCall];
+  const total = c.segments.reduce((a, g) => a + g.tokens_est, 0) || 1;
+  const inTok = c.usage ? c.usage.prompt_tokens : c.input_tokens_est;
+  const pct = c.context_window ? (100 * inTok / c.context_window) : null;
+  const sys = c.segments.filter((g) => g.kind === "system");
+  const rest = c.segments.filter((g) => g.kind !== "system");
+
+  const winSegs = c.segments.map((g) =>
+    `<i style="width:${(100 * g.tokens_est / total).toFixed(2)}%;background:${kindColor(g.kind)}"></i>`).join("");
+  const windowbar = `
+    <div class="windowbar">
+      <div class="lbl"><span>context window — input ${fmt(inTok)} tok${c.usage ? "" : " (est.)"}</span>
+        <span>${pct === null ? "window size unknown" : pct.toFixed(2) + "% of " + fmt(c.context_window)}</span></div>
+      <div class="bar">${pct !== null
+        ? `<i style="width:${Math.max(pct, 0.6)}%;display:flex;overflow:hidden">${winSegs}</i>` : winSegs}</div>
+    </div>`;
+
+  const segs = rest.map((g) => `
+    <div class="seg" style="border-left-color:${kindColor(g.kind)}">
+      <div class="top"><span class="kind" style="color:${kindColor(g.kind)}">${esc(segLabel(g))}</span>
+        <span class="share">${fmt(g.tokens_est)} tok · ${(100 * g.tokens_est / total).toFixed(0)}%</span></div>
+      <div class="preview">${esc(g.content.slice(0, 90))}</div>
+      <div class="full">${esc(g.content)}</div>
+    </div>`).join("");
+
+  const sysTok = sys.reduce((a, g) => a + g.tokens_est, 0);
+  const instr = sys.length ? `
+    <div class="instr" id="instr">
+      <div class="lbl"><span>instructions</span><span>${fmt(sysTok)} tok · ${(100 * sysTok / total).toFixed(0)}% of input</span></div>
+      <div class="txt">${esc(sys.map((g) => g.content).join("\n\n"))}</div>
+    </div>` : "";
+
+  const fn = `
+    <div class="fn">
+      <div class="stepname">${esc(stepOf(c) ?? "llm call")}()</div>
+      <div class="model">${esc(c.model)}</div>
+      <div class="row"><span>api</span><span>${esc(c.api)}</span></div>
+      <div class="row"><span>duration</span><span>${c.duration_ms ? c.duration_ms.toFixed(0) + " ms" : "–"}</span></div>
+      <div class="row"><span>mode</span><span>${c.stream ? "streaming" : "sync"}</span></div>
+      ${c.usage ? `<div class="row"><span>usage</span><span>${fmt(c.usage.total_tokens)} tok</span></div>` : ""}
+      ${instr}
+    </div>`;
+
+  const out = c.error
+    ? `<div class="out error"><div class="head"><span>error</span><span>${esc(c.error.type)}</span></div>
+       <div class="body">${esc(c.error.message)}</div></div>`
+    : `<div class="out"><div class="head"><span class="ol">llm output</span>
+         <span>${c.usage ? fmt(c.usage.completion_tokens) + " tok · " : ""}${esc(c.output && c.output.finish_reason || "")}</span></div>
+       <div class="body">${esc(c.output ? c.output.content : "")}</div></div>`;
+
+  main.innerHTML = `
+    <div class="callhead"><h2>call ${selCall + 1}</h2>
+      <span class="meta">${esc(c.id)} · ${esc(c.timestamp)}</span></div>
+    ${windowbar}
+    <div class="flow">
+      <div class="col"><h4>input — context</h4>${segs}
+        <div class="hint">user input may contain app-injected context (RAG, templates) — the tag API will split and attribute it</div></div>
+      <div class="arrow">→</div>
+      <div class="col"><h4>fn — step + model + instructions</h4>${fn}</div>
+      <div class="arrow">→</div>
+      <div class="col"><h4>output</h4>${out}</div>
+    </div>
+    ${c.call_stack.length ? `<div class="stackline">called from <code>${c.call_stack.map(esc).join(" ← ")}</code></div>` : ""}`;
+  main.querySelectorAll(".seg").forEach((el) =>
+    el.addEventListener("click", () => el.classList.toggle("open")));
+  const instrEl = document.getElementById("instr");
+  if (instrEl) instrEl.addEventListener("click", () => instrEl.classList.toggle("open"));
+}
+
+/* ================= chain view (session flow) ================= */
+
+function findEdges(session) {
+  const list = [];
+  session.calls.forEach((a, i) => {
+    const out = (a.output && a.output.content) || "";
+    if (out.length < 15) return;
+    session.calls.forEach((b, j) => {
+      if (j <= i) return;
+      if (b.segments.some((g) => g.content.includes(out))) list.push([i, j]);
+    });
+  });
+  return list;
+}
+
+/* a loop = consecutive calls of the SAME step whose outputs feed the next input */
+function findLoops(session, edges) {
+  const next = new Set(edges.filter(([i, j]) => j === i + 1).map(([i]) => i));
+  const runs = [];
+  let start = null;
+  session.calls.forEach((c, i) => {
+    const nx = session.calls[i + 1];
+    const chained = next.has(i) && nx && nx.model === c.model && stepOf(nx) === stepOf(c);
+    if (chained && start === null) start = i;
+    if (!chained && start !== null) { runs.push([start, i]); start = null; }
+  });
+  if (start !== null) runs.push([start, session.calls.length - 1]);
+  return runs.filter(([a, b]) => b - a >= 1);
+}
+
+function renderChainNav() {
+  let h = "";
+  data.sessions.forEach((s, i) => {
+    h += `<div class="sessrow ${i === selSession ? "sel" : ""}" data-i="${i}">
+      <div class="id">${esc(s.id)}</div>
+      <div class="sub">${s.calls.length} calls</div></div>`;
+  });
+  const nav = document.getElementById("nav");
+  nav.innerHTML = h;
+  nav.querySelectorAll(".sessrow").forEach((el) =>
+    el.addEventListener("click", () => { selSession = +el.dataset.i; hiFrom = null; render(); }));
+}
+
+function chainNodeHtml(c, i, targets, downstream) {
+  const agg = new Map();
+  c.segments.forEach((g) => {
+    const key = g.kind === "tool" ? `tool:${g.name ?? "tool"}` : g.kind;
+    const cur = agg.get(key) ?? {
+      kind: g.kind,
+      label: g.kind === "tool" ? (g.name ?? "tool/MCP") : (CHIP_LABEL[g.kind] ?? g.kind),
+      tok: 0, n: 0,
+    };
+    cur.tok += g.tokens_est; cur.n += 1; agg.set(key, cur);
+  });
+  const total = c.segments.reduce((a, g) => a + g.tokens_est, 0) || 1;
+  const chips = [...agg.values()].map((a) =>
+    `<span class="chip ${a.kind === "assistant" ? "fed" : ""}">
+       <i style="background:${kindColor(a.kind)}"></i>${esc(a.label)}${a.n > 1 ? " ×" + a.n : ""} · ${fmt(a.tok)}</span>`).join("");
+  const minibar = c.segments.map((g) =>
+    `<i style="width:${(100 * g.tokens_est / total).toFixed(2)}%;background:${kindColor(g.kind)}"></i>`).join("");
+  const ds = downstream
+    ? `<span class="ds" title="feeds ${downstream} downstream call(s)">↳ ${downstream}</span>` : "";
+  const out = c.error
+    ? `<div class="outchip err" data-i="${i}"><div class="t"><span>error</span></div>
+       <div class="p">${esc(c.error.type)}: ${esc(c.error.message)}</div></div>`
+    : `<div class="outchip ${hiFrom === i ? "hi" : ""}" data-i="${i}">
+       <div class="t"><b>output</b><span>${ds} ${c.usage ? fmt(c.usage.completion_tokens) + " tok" : ""}</span></div>
+       <div class="p">${esc(c.output ? c.output.content : "")}</div></div>`;
+  return `<div class="node ${targets.includes(i) ? "hi-target" : ""}" data-n="${i}">
+    <span class="nlabel">${i + 1}</span>
+    <div><div class="chips">${chips}</div><div class="minibar">${minibar}</div></div>
+    <div class="fnpill"><div class="step">${esc(stepOf(c) ?? "llm call")}()</div>
+      <div class="model">${esc(c.model)}</div>
+      <div class="meta">${esc(c.api)} · ${c.duration_ms ? c.duration_ms.toFixed(0) + "ms" : "–"}${c.stream ? " · stream" : ""}</div></div>
+    ${out}</div>`;
+}
+
+function renderChain() {
+  const main = document.getElementById("main");
+  if (!data.sessions.length) {
+    main.innerHTML = '<div class="empty">No LLM calls recorded yet.</div>';
+    return;
+  }
+  const s = data.sessions[selSession];
+  const edges = findEdges(s);
+  const loops = findLoops(s, edges);
+  const targets = hiFrom === null ? [] : edges.filter((e) => e[0] === hiFrom).map((e) => e[1]);
+  const dsCount = (i) => edges.filter((e) => e[0] === i && e[1] > i + 1).length;
+
+  let h = `<div class="legend">
+      <span><i style="background:var(--sys)"></i>app</span>
+      <span><i style="background:var(--user)"></i>user</span>
+      <span><i style="background:var(--assistant)"></i>llm output</span>
+      <span><i style="background:var(--tool)"></i>tool/MCP</span>
+      <span><i style="background:var(--tooldef)"></i>tool defs</span></div>
+    <p class="sesshead">session <b>${esc(s.id)}</b> — ${s.calls.length} calls, time flows ↓ ;
+      <b>↳ n</b> = feeds n later calls beyond the next (click an output to trace)</p>`;
+  let body = "";
+  let i = 0;
+  while (i < s.calls.length) {
+    const loop = loops.find(([a]) => a === i);
+    if (loop) {
+      const [a, b] = loop;
+      body += `<div class="loopbox"><span class="loophead">↺ loop ×${b - a + 1}
+        <span class="why">${esc(stepOf(s.calls[a]) ?? "same fn")}() repeats — each output feeds the next input</span></span>`;
+      for (let k = a; k <= b; k++) body += chainNodeHtml(s.calls[k], k, targets, dsCount(k));
+      body += `</div>`;
+      i = b + 1;
+    } else {
+      body += chainNodeHtml(s.calls[i], i, targets, dsCount(i));
+      i += 1;
+    }
+  }
+  main.innerHTML = `${h}<div id="wrap"><svg id="edges"></svg><div id="chain">${body}</div></div>
+    <div class="note">edges are inferred from the data — an output's text found inside a later
+    call's input. Tagging (span API) will add source-level precision.</div>`;
+  main.querySelectorAll(".outchip").forEach((el) =>
+    el.addEventListener("click", () => {
+      hiFrom = hiFrom === +el.dataset.i ? null : +el.dataset.i; render();
+    }));
+  requestAnimationFrame(drawEdges);
+}
+
+function drawEdges() {
+  const svg = document.getElementById("edges");
+  const wrap = document.getElementById("wrap");
+  if (!svg || !wrap) return;
+  const s = data.sessions[selSession];
+  if (!s) return;
+  const wr = wrap.getBoundingClientRect();
+  svg.setAttribute("viewBox", `0 0 ${wr.width} ${wr.height}`);
+  const bodyStyle = getComputedStyle(document.body);
+  let h = `<defs>
+    <marker id="arr" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="${bodyStyle.getPropertyValue("--edge").trim() || "#1FBFAE"}"/></marker>
+    <marker id="arrhi" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="${bodyStyle.getPropertyValue("--edge-hi").trim() || "#11897d"}"/></marker>
+  </defs>`;
+  const all = findEdges(s);
+  /* default: only the quiet adjacent chain; click an output to fan out its downstream */
+  const visible = hiFrom === null
+    ? all.filter(([i, j]) => j === i + 1)
+    : all.filter(([i]) => i === hiFrom);
+  const GUTTER = -34;
+  visible.forEach(([i, j]) => {
+    const a = document.querySelector(`.node[data-n="${i}"] .outchip`);
+    const bNode = document.querySelector(`.node[data-n="${j}"]`);
+    const b = (bNode && (bNode.querySelector(".chips .chip.fed") || bNode.querySelector(".chips")));
+    if (!a || !b) return;
+    const ar = a.getBoundingClientRect(), br = b.getBoundingClientRect();
+    const hi = hiFrom === i;
+    const stroke = `stroke="${hi ? "var(--edge-hi)" : "var(--edge)"}"
+      stroke-width="${hi ? 2.5 : 2}" fill="none" marker-end="url(#${hi ? "arrhi" : "arr"})"`;
+    if (j === i + 1) {
+      const x1 = ar.left - wr.left + 18, y1 = ar.bottom - wr.top - 2;
+      const x2 = br.left + br.width / 2 - wr.left, y2 = br.top - wr.top - 2;
+      h += `<path d="M ${x1} ${y1} C ${x1} ${y1 + 30}, ${x2} ${y2 - 30}, ${x2} ${y2}" ${stroke}/>`;
+    } else {
+      const x1 = ar.left - wr.left + 18, y1 = ar.bottom - wr.top - 2;
+      const x2 = br.left - wr.left - 6, y2 = br.top + br.height / 2 - wr.top;
+      h += `<path d="M ${x1} ${y1} C ${x1} ${y1 + 44}, ${GUTTER} ${y1 + 30}, ${GUTTER} ${(y1 + y2) / 2}
+            C ${GUTTER} ${y2 - 6}, ${x2 - 40} ${y2}, ${x2} ${y2}" ${stroke}/>`;
+    }
+  });
+  svg.innerHTML = h;
+}
+
+/* ---------- root render ---------- */
+function render() {
+  document.querySelectorAll(".tab").forEach((t) =>
+    t.classList.toggle("sel", t.dataset.view === view));
+  document.body.dataset.view = view;
+  if (view === "calls") { renderCallsNav(); renderCallDetail(); }
+  else { renderChainNav(); renderChain(); }
+}
+
+render();
+applyTheme();
+addEventListener("resize", () => { if (view === "chain") drawEdges(); });
