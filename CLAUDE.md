@@ -33,7 +33,7 @@ Three loosely-coupled layers sharing one artifact, the JSONL event log:
 
 The event schema (`schema/`, versioned JSON Schema) is language-agnostic by design — it is the contract between all layers and future non-Python SDKs.
 
-The frontend (TypeScript + React + Vite, in `frontend/`) ships **only as a prebuilt bundle** copied into `src/ctxlineage/static/`; Python never builds it and the HTML must open offline (no CDN references). Report UI palette: Ink `#252B33` × Lineage Teal `#1FBFAE`.
+The report frontend is **server-rendered by Python** (decided 2026-07-16 — no React/Vite, no node toolchain): templates, vanilla JS, and a single CSS-token block live as package resources under `src/ctxlineage/_report/`; the lineage graph is emitted as static SVG whose colors reference CSS custom properties. Light and dark mode are both mandatory (default follows `prefers-color-scheme`, manual toggle persisted). The HTML must open offline (no CDN references). Design reference: the maintainer's drt-hub/drt `drt docs` (deterministic layout engine, reserved-gutter edge routing) and the agreed mockups in `docs/design/m2-mockups/`. Report UI palette: Ink `#252B33` × Lineage Teal `#1FBFAE`.
 
 ## Stack
 

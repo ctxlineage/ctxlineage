@@ -33,3 +33,6 @@ frontend/dist/
 
 # Playwright MCP artifacts
 .playwright-mcp/
+
+# Generated report artifacts
+ctxlineage-report.html
