@@ -150,6 +150,9 @@ function renderOverview() {
        <span class="ss">${esc(x.s.id)}</span>${right}</div>`;
 
   main.innerHTML = `<div class="ov">
+    ${data.redaction ? `<div class="note" style="margin:0 0 14px">🔒 redacted report —
+      ${fmt(data.redaction.matches)} match(es) of ${data.redaction.patterns} pattern(s)
+      replaced with [redacted]. Counts and match rates reflect the original text.</div>` : ""}
     <div class="cards">
       ${stat(fmt(data.stats.calls), "llm calls")}
       ${stat(fmt(data.stats.sessions), "sessions")}
