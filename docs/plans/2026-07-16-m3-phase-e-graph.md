@@ -2,7 +2,8 @@
 
 > **For Claude:** TDD, one PR. Tracking issue: #3 (final phase). Spec:
 > `docs/design/m3-lineage-graph/` (six decisions from the phase-D session).
-> Also closes #30 (anthropic usage vocabulary) — same backend touch.
+> Also part of #30 (the usage-vocabulary item only) — same backend touch;
+> #30 stays open for anthropic output shapes and content-block decomposition.
 
 **Goal:** the report's fourth view (Overview | Calls | Chain | **Graph**):
 sources → elements → calls with lineage-closure highlighting, per the agreed

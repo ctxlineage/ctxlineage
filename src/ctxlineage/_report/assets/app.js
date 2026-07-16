@@ -96,6 +96,7 @@ document.querySelectorAll(".tab").forEach((t) =>
     view = t.dataset.view;
     if ((view === "chain" || view === "graph") && calls[selCall]) selSession = calls[selCall].si;
     hiFrom = null;
+    graphFocus = null;
     render();
   }));
 
@@ -510,22 +511,25 @@ function buildGraph(s) {
       edges.push({ from: "call:" + e.from, to: "call:" + e.to, kind: "flows" });
     }
   });
-  return { nodes, edges };
+  /* adjacency maps: closure and layout stay linear on big sessions */
+  const succ = new Map(), pred = new Map();
+  const push = (m, k, v) => { const a = m.get(k); if (a) a.push(v); else m.set(k, [v]); };
+  edges.forEach((e) => { push(succ, e.from, e.to); push(pred, e.to, e.from); });
+  return { nodes, edges, succ, pred };
 }
 
 function lineageClosure(graph, id) {
   const out = new Set([id]);
-  const walk = (dir) => {
+  const walk = (adj) => {
     const stack = [id];
     while (stack.length) {
       const cur = stack.pop();
-      graph.edges.forEach((e) => {
-        const nxt = dir === "down" ? (e.from === cur ? e.to : null) : (e.to === cur ? e.from : null);
-        if (nxt && !out.has(nxt)) { out.add(nxt); stack.push(nxt); }
+      (adj.get(cur) || []).forEach((nxt) => {
+        if (!out.has(nxt)) { out.add(nxt); stack.push(nxt); }
       });
     }
   };
-  walk("down"); walk("up");
+  walk(graph.succ); walk(graph.pred);
   return out;
 }
 
@@ -545,7 +549,7 @@ function renderGraphView() {
   s.calls.forEach((c, i) => { y["call:" + c.id] = 40 + i * (H.call + GAPY + 14); });
   const els = g.nodes.filter((n) => n.type === "element");
   els.forEach((n, i) => {
-    const feeds = g.edges.filter((e) => e.from === n.id && e.kind === "feeds").map((e) => y[e.to] ?? 0);
+    const feeds = (g.succ.get(n.id) || []).filter((t) => t.startsWith("call:")).map((t) => y[t] ?? 0);
     n.want = feeds.length ? feeds.reduce((a, b) => a + b, 0) / feeds.length : 40 + i * 60;
   });
   els.sort((a, b) => a.want - b.want);
@@ -553,16 +557,16 @@ function renderGraphView() {
   els.forEach((n) => { y[n.id] = Math.max(n.want, cursor); cursor = y[n.id] + H.element + GAPY; });
   const srcs = g.nodes.filter((n) => n.type === "source");
   srcs.forEach((n, i) => {
-    const outs = g.edges.filter((e) => e.from === n.id).map((e) => y[e.to] ?? 0);
+    const outs = (g.succ.get(n.id) || []).map((t) => y[t] ?? 0);
     n.want = outs.length ? outs.reduce((a, b) => a + b, 0) / outs.length : 30 + i * 60;
   });
   srcs.sort((a, b) => a.want - b.want);
   cursor = 30;
   srcs.forEach((n) => { y[n.id] = Math.max(n.want, cursor); cursor = y[n.id] + H.source + GAPY; });
 
-  const height = Math.max(60, ...Object.values(y)) + 120;
+  const height = Object.values(y).reduce((a, b) => Math.max(a, b), 60) + 120;
   const laneBase = COLX.call + W.call + 30;
-  const maxTok = Math.max(1, ...els.map((n) => n.tok || 0));
+  const maxTok = els.reduce((a, n) => Math.max(a, n.tok || 0), 1);
   const nodeDim = (id) => (lit && !lit.has(id) ? "dimmed" : "");
   const edgeLit = (e) => lit && lit.has(e.from) && lit.has(e.to);
   const edgeStroke = (e) => (lit ? (edgeLit(e) ? "var(--edge-hi)" : "var(--edge-dim)") : "var(--edge)");
@@ -619,12 +623,12 @@ function renderGraphView() {
   g.nodes.forEach((n) => {
     const cls = `nodebox ${nodeDim(n.id)}`;
     if (n.type === "source") {
-      nh += `<g class="${cls}" data-id="${n.id}">
+      nh += `<g class="${cls}" data-id="${esc(n.id)}">
         <rect x="${COLX.source}" y="${y[n.id]}" width="${W.source}" height="${H.source}" rx="7"
           fill="var(--src-bg)" stroke="var(--border)"/>
         <text x="${COLX.source + 10}" y="${y[n.id] + 22}" style="fill:var(--muted)">${esc(n.label)}</text></g>`;
     } else if (n.type === "element") {
-      nh += `<g class="${cls}" data-id="${n.id}">
+      nh += `<g class="${cls}" data-id="${esc(n.id)}">
         <rect x="${COLX.element}" y="${y[n.id]}" width="${W.element}" height="${H.element}" rx="9"
           fill="var(--panel)" stroke="${n.matched ? kindColor(n.label) : "var(--muted)"}"
           stroke-width="1.6" ${n.matched ? "" : 'stroke-dasharray="5 4"'}/>
@@ -634,7 +638,7 @@ function renderGraphView() {
           ${n.tok ? fmt(n.tok) + " tok · " : ""}${esc(n.transform ? n.transform : n.matched ? "matched" : "unmatched")}</text>
         ${n.tok ? `<rect x="${COLX.element + 14}" y="${y[n.id] + H.element - 7}" width="${Math.max(6, (W.element - 28) * n.tok / maxTok)}" height="3" rx="1.5" fill="${kindColor(n.label)}" opacity=".8"/>` : ""}</g>`;
     } else {
-      nh += `<g class="${cls}" data-id="${n.id}">
+      nh += `<g class="${cls}" data-id="${esc(n.id)}">
         <rect x="${COLX.call}" y="${y[n.id]}" width="${W.call}" height="${H.call}" rx="11"
           fill="var(--fn-bg)" stroke="${n.error ? "var(--err)" : "var(--fn-border)"}"/>
         <text x="${COLX.call + 14}" y="${y[n.id] + 21}" font-weight="700" style="fill:var(--fn-text)"
@@ -668,9 +672,10 @@ function renderGraphView() {
 function render() {
   /* filtering away the current selection jumps to the first match */
   if (query) {
-    if (view === "chain" && data.sessions[selSession] && !sessionMatches(data.sessions[selSession])) {
+    if ((view === "chain" || view === "graph") &&
+        data.sessions[selSession] && !sessionMatches(data.sessions[selSession])) {
       const idx = data.sessions.findIndex(sessionMatches);
-      if (idx >= 0) { selSession = idx; hiFrom = null; }
+      if (idx >= 0) { selSession = idx; hiFrom = null; graphFocus = null; }
     }
     if (view === "calls" && calls[selCall] && !callMatches(calls[selCall].s, calls[selCall].c)) {
       const idx = calls.findIndex((x) => callMatches(x.s, x.c));

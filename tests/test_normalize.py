@@ -507,7 +507,30 @@ def test_anthropic_usage_vocabulary_canonicalized():
 
 
 def test_openai_usage_untouched():
-    events = _span_events("THE CHUNK TEXT", "Context:\nTHE CHUNK TEXT\nQ: hi")
-    data = normalize.build_report_data(events)
-    call = data["sessions"][0]["calls"][0]
-    assert call["usage"] is None or "input_tokens" not in (call["usage"] or {})
+    event = _call_event(
+        "c1",
+        "2026-07-16T09:00:00+00:00",
+        [{"role": "user", "content": "hello there my friend"}],
+        "hi from the assistant",
+    )
+    event["payload"]["usage"] = {"prompt_tokens": 20, "completion_tokens": 5, "total_tokens": 25}
+    usage = normalize.build_report_data([event])["sessions"][0]["calls"][0]["usage"]
+    assert usage == {"prompt_tokens": 20, "completion_tokens": 5, "total_tokens": 25}
+
+
+def test_both_usage_vocabularies_present_no_double_count():
+    event = _call_event(
+        "c1",
+        "2026-07-16T09:00:00+00:00",
+        [{"role": "user", "content": "hello there my friend"}],
+        "hi from claude model",
+    )
+    event["payload"]["usage"] = {
+        "prompt_tokens": 12,
+        "completion_tokens": 5,
+        "total_tokens": 17,
+        "input_tokens": 12,
+        "output_tokens": 5,
+    }
+    usage = normalize.build_report_data([event])["sessions"][0]["calls"][0]["usage"]
+    assert usage == event["payload"]["usage"]  # openai vocabulary wins, nothing recomputed
