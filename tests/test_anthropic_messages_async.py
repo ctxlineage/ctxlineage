@@ -57,6 +57,22 @@ async def test_async_create_stream_assembles_content(
 
 
 @respx.mock
+async def test_builtin_anext_works_and_records(capture, async_client, messages_stream_body):
+    respx.post(MESSAGES_URL).mock(
+        return_value=httpx.Response(200, headers=SSE_HEADERS, content=messages_stream_body)
+    )
+    stream = await async_client.messages.create(
+        model="claude-sonnet-5", max_tokens=64, messages=MESSAGES, stream=True
+    )
+    first = await anext(stream)  # builtin anext() on the proxy itself
+    assert first.type == "message_start"
+    rest = [c async for c in stream]  # mixed consumption continues where anext() left off
+    assert len(rest) == 6
+    (event,) = capture()
+    assert event["payload"]["response"]["content"]["0"] == "Hello world"
+
+
+@respx.mock
 async def test_async_stream_helper_records_full_message(
     capture, async_client, validate_event, messages_stream_body
 ):

@@ -109,3 +109,27 @@ def test_stream_helper_never_entered_records_nothing(
     manager = _stream_manager(anthropic_client)
     del manager  # no __enter__, no HTTP request, nothing to record
     assert capture() == []
+
+
+@respx.mock
+def test_builtin_next_works_and_records(capture, anthropic_client, messages_stream_body):
+    _mock_stream(messages_stream_body)
+    stream = _create_stream(anthropic_client)
+    first = next(stream)  # builtin next() on the proxy itself, not iter(stream)
+    assert first.type == "message_start"
+    rest = [c for c in stream]  # mixed consumption continues where next() left off
+    assert len(rest) == 6
+    (event,) = capture()
+    assert event["payload"]["response"]["content"]["0"] == "Hello world"
+    assert event["payload"]["response"]["chunk_count"] == 7
+
+
+@respx.mock
+def test_builtin_next_partial_then_close_records(capture, anthropic_client, messages_stream_body):
+    _mock_stream(messages_stream_body)
+    stream = _create_stream(anthropic_client)
+    for _ in range(3):  # message_start, content_block_start, first text delta
+        next(stream)
+    stream.close()
+    (event,) = capture()
+    assert event["payload"]["response"]["content"]["0"] == "Hello"

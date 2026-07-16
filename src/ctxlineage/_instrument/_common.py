@@ -75,6 +75,15 @@ class StreamRecorderMixin:
 
 
 class StreamProxy(wrapt.ObjectProxy, StreamRecorderMixin):
+    """Recording proxy over an SDK stream.
+
+    Dunder protocol methods must be defined here: ObjectProxy does not fill
+    type slots, so builtins like next()/anext() bypass __getattr__ delegation
+    and would raise TypeError without explicit definitions. Known limitation:
+    isinstance(proxy, SDKStreamClass) is False when the SDK class uses a
+    custom metaclass __instancecheck__ (anthropic.Stream does).
+    """
+
     def __init__(self, wrapped, payload: dict, assemble: Callable[[list], dict], span_id=None):
         super().__init__(wrapped)
         self._self_init(payload, assemble, span_id)
@@ -86,6 +95,15 @@ class StreamProxy(wrapt.ObjectProxy, StreamRecorderMixin):
                 yield chunk
         finally:
             self._self_finish()
+
+    def __next__(self):
+        try:
+            chunk = self.__wrapped__.__next__()
+        except StopIteration:
+            self._self_finish()
+            raise
+        self._self_add(chunk)
+        return chunk
 
     def __enter__(self):
         self.__wrapped__.__enter__()
@@ -105,6 +123,8 @@ class StreamProxy(wrapt.ObjectProxy, StreamRecorderMixin):
 
 
 class AsyncStreamProxy(wrapt.ObjectProxy, StreamRecorderMixin):
+    """Async twin of StreamProxy; see its docstring for the dunder rationale."""
+
     def __init__(self, wrapped, payload: dict, assemble: Callable[[list], dict], span_id=None):
         super().__init__(wrapped)
         self._self_init(payload, assemble, span_id)
@@ -116,6 +136,15 @@ class AsyncStreamProxy(wrapt.ObjectProxy, StreamRecorderMixin):
                 yield chunk
         finally:
             self._self_finish()
+
+    async def __anext__(self):
+        try:
+            chunk = await self.__wrapped__.__anext__()
+        except StopAsyncIteration:
+            self._self_finish()
+            raise
+        self._self_add(chunk)
+        return chunk
 
     async def __aenter__(self):
         await self.__wrapped__.__aenter__()
