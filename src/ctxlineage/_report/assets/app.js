@@ -232,8 +232,8 @@ function renderCallDetail() {
     <div class="seg ${ws ? "ws" : ""}" style="border-left-color:${kindColor(g.kind)}">
       <div class="top"><span class="kind" style="color:${kindColor(g.kind)}">${esc(segLabel(g))}</span>
         <span class="share">${fmt(g.tokens_est)} tok · ${(100 * g.tokens_est / total).toFixed(0)}%</span></div>
-      <div class="preview">${ws ? "(whitespace separator)" : esc(clip(g.content, 90))}</div>
-      <div class="full">${ws ? "(whitespace only — separates the surrounding segments)" : esc(g.content)}</div>
+      <div class="preview" dir="auto">${ws ? "(whitespace separator)" : esc(clip(g.content, 90))}</div>
+      <div class="full" dir="auto">${ws ? "(whitespace only — separates the surrounding segments)" : esc(g.content)}</div>
     </div>`;
   }).join("");
 
@@ -263,7 +263,7 @@ function renderCallDetail() {
        <div class="body">${esc(c.error.message)}</div></div>`
     : `<div class="out"><div class="head"><span class="ol">llm output</span>
          <span>${c.usage ? fmt(c.usage.completion_tokens) + " tok · " : ""}${esc(c.output && c.output.finish_reason || "")}</span></div>
-       <div class="body">${esc(c.output ? c.output.content : "")}</div></div>`;
+       <div class="body" dir="auto">${esc(c.output ? c.output.content : "")}</div></div>`;
 
   main.innerHTML = `
     <div class="callhead"><h2>call ${selCall + 1}</h2>
@@ -356,7 +356,7 @@ function chainNodeHtml(sess, c, i, targets, downstream) {
        <div class="p">${esc(c.error.type)}: ${esc(c.error.message)}</div></div>`
     : `<div class="outchip ${hiFrom === i ? "hi" : ""}" data-i="${i}">
        <div class="t"><b>output</b><span>${ds} ${c.usage ? fmt(c.usage.completion_tokens) + " tok" : ""}</span></div>
-       <div class="p">${esc(c.output ? c.output.content : "")}</div></div>`;
+       <div class="p" dir="auto">${esc(c.output ? c.output.content : "")}</div></div>`;
   return `<div class="node ${targets.includes(i) ? "hi-target" : ""}${query && !callMatches(sess, c) ? " dim" : ""}" data-n="${i}">
     <span class="nlabel">${i + 1}</span>
     <div><div class="chips">${chips}</div><div class="minibar">${minibar}</div></div>

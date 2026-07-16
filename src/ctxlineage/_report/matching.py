@@ -8,6 +8,7 @@ match stays visible as untagged instead of breaking.
 from __future__ import annotations
 
 import json
+import unicodedata
 
 _MIN_UNIT_LEN = 4  # substring units shorter than this match everywhere; ignore
 
@@ -16,7 +17,7 @@ def _units(tag: dict) -> list[str]:
     """Matchable strings for a tag: the content, or its elements when it is a
     JSON array of strings (chunk lists are matched element-wise because apps
     join them into one message)."""
-    content = tag.get("content") or ""
+    content = unicodedata.normalize("NFC", tag.get("content") or "")
     units = [content]
     if content.lstrip().startswith("["):
         try:
@@ -60,7 +61,8 @@ def apply_tags(segments: list[dict], tags: list[dict]) -> tuple[list[dict], set[
     matched: set[str] = set()
     out: list[dict] = []
     for segment in segments:
-        content = segment["content"]
+        # NFC on both sides: composed/decomposed accent forms must still match
+        content = unicodedata.normalize("NFC", segment["content"])
         spans = _find_spans(content, tags) if content else []
         if not spans:
             out.append({**segment, "tagged": False})

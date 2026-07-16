@@ -96,3 +96,25 @@ def test_japanese_partial_match_splits_correctly():
     assert matched == {"rag_chunks"}
     tagged = next(s for s in out if s["tagged"])
     assert tagged["content"] == chunk
+
+
+def test_nfc_nfd_forms_still_match():
+    import unicodedata
+
+    nfc = unicodedata.normalize("NFC", "café au lait")
+    nfd = unicodedata.normalize("NFD", "café au lait")
+    assert nfc != nfd  # premise: different byte forms
+    segments = [_seg("Order: " + nfc + " please")]
+    tags = [_tag("menu_item", nfd)]
+    out, matched = matching.apply_tags(segments, tags)
+    assert matched == {"menu_item"}
+
+
+def test_arabic_rtl_content_matches():
+    chunk = "القاهرة هي عاصمة مصر"
+    segments = [_seg("السياق: " + chunk + " سؤال: ما هي العاصمة؟")]
+    tags = [_tag("rag_chunks", json.dumps([chunk], ensure_ascii=False))]
+    out, matched = matching.apply_tags(segments, tags)
+    assert matched == {"rag_chunks"}
+    tagged = next(s for s in out if s["tagged"])
+    assert tagged["content"] == chunk
