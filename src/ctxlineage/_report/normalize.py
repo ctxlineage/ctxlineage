@@ -167,6 +167,7 @@ def _normalize_call(event: dict) -> dict:
         segment["tokens_est"] = estimate_tokens(segment["content"], model or "")
     return {
         "id": event.get("call_id"),
+        "span_id": event.get("span_id"),
         "timestamp": event.get("timestamp"),
         "provider": payload.get("provider"),
         "api": api,
