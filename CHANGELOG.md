@@ -7,6 +7,10 @@ land in minor versions).
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-07-17
+
+First public release.
+
 ### Added
 - Capture core: `ctxlineage.init()` auto-instruments the **openai** (Chat
   Completions + Responses API) and **anthropic** (Messages) SDKs — sync,
@@ -29,5 +33,9 @@ land in minor versions).
 - Read-only **MCP server** (`ctxlineage[mcp]` extra, `ctxlineage-mcp` entry
   point): list_sessions / get_call / get_lineage / generate_report over the
   same JSONL.
-- Runnable examples (`examples/rag_app.py`, `examples/agent_app.py`, both
-  with a keyless `--mock` mode) and a `ctxlineage-instrument` agent skill.
+- Anthropic Messages rendered honestly in the report: top-level `system`
+  prompt, `tool_use` / `tool_result` blocks, thinking-block markers, streamed
+  assembly, and cache-token folding into the window figures.
+- Runnable examples (`examples/rag_app.py`, `examples/agent_app.py`,
+  `examples/anthropic_app.py`, all with a keyless `--mock` mode) and a
+  `ctxlineage-instrument` agent skill.

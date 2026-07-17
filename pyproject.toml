@@ -1,12 +1,26 @@
 [project]
 name = "ctxlineage"
-version = "0.0.1.dev0"
+version = "0.1.0"
 description = "See exactly what context each LLM call consumed - local-first context lineage for LLM apps."
 readme = "README.md"
 requires-python = ">=3.10"
 license = "Apache-2.0"
 authors = [{ name = "K.Masuda", email = "me@masukai.dev" }]
+keywords = ["llm", "context", "lineage", "observability", "openai", "anthropic", "local-first"]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Intended Audience :: Developers",
+  "Programming Language :: Python :: 3",
+  "Topic :: Software Development :: Libraries :: Python Modules",
+  "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
 dependencies = ["wrapt>=1.16", "click>=8.1", "tiktoken>=0.8"]
+
+[project.urls]
+Homepage = "https://github.com/ctxlineage/ctxlineage"
+Repository = "https://github.com/ctxlineage/ctxlineage"
+Issues = "https://github.com/ctxlineage/ctxlineage/issues"
+Changelog = "https://github.com/ctxlineage/ctxlineage/blob/main/CHANGELOG.md"
 
 [project.optional-dependencies]
 mcp = ["mcp>=1.2"]
