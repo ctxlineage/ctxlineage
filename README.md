@@ -7,11 +7,14 @@
 
 # ctxlineage
 
-### See exactly what context each LLM call consumed — and where it flowed next.
+### See exactly what context each LLM call consumed — and how it flowed into the next.
 
 Two lines of code turn your app's LLM calls into a single static HTML report:
 the anatomy of every context window, and the lineage of every context element.
 **No server, no database, no account. Your prompts never leave your machine.**
+
+Not another trace viewer: ctxlineage makes your runtime context an **engineered
+artifact** — decomposed, provenance-tracked, and *(v0.2)* testable in CI.
 
 [![CI](https://img.shields.io/github/actions/workflow/status/ctxlineage/ctxlineage/test.yml?branch=main&style=flat-square&logo=githubactions&logoColor=white&label=CI)](https://github.com/ctxlineage/ctxlineage/actions/workflows/test.yml)
 [![Coverage](https://img.shields.io/codecov/c/github/ctxlineage/ctxlineage?style=flat-square&logo=codecov&logoColor=white)](https://codecov.io/gh/ctxlineage/ctxlineage)
@@ -98,10 +101,12 @@ the log entirely with `ctxlineage.init(redact_fields=["request.messages.content"
 
 ## Status
 
-🚧 **Pre-release.** v0.1.0 (PyPI) is around the corner — the capture layer
-(openai + anthropic), the four-view report, and the span/tag lineage pipeline
-are done; MCP server and examples are landing now. Roadmap: the
-[milestone issues](https://github.com/ctxlineage/ctxlineage/issues?q=label%3Amilestone).
+🚧 **Pre-release.** v0.1.0 (PyPI) is imminent — the capture layer (openai +
+anthropic), the four-view report, the span/tag lineage pipeline, the read-only
+MCP server, and runnable examples are all in. Where it's going: context you can
+**test in CI** (v0.2) and importing coding-agent sessions (`claude -p` / Claude
+Code) into the same report. See the
+[issues](https://github.com/ctxlineage/ctxlineage/issues).
 
 ## Contributing
 

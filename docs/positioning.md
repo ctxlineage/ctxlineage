@@ -1,8 +1,35 @@
 # Positioning — ctxlineage in the landscape
 
-> Status: **draft** (2026-07-16). Living document; basis for discussion #17
-> (differentiation vs the ontology / semantic-layer trend). Feeds the launch
-> messaging (#8) and the README pitch.
+> Status: **resolved** (#17, 2026-07-17). Living document; feeds the launch
+> messaging (#8) and the README pitch. The one-line spine below is the
+> settled differentiation.
+
+## The spine (settled #17)
+
+**Everyone else draws a graph and stops at description. ctxlineage makes
+runtime context an engineered artifact you can improve and — the part nobody
+else can do — test.**
+
+The nearby "graph" tools each visualize a *different* structure, and all three
+stop at **description** ("here is what relates to what"), never reaching the
+engineering loop (understand → improve → **verify in CI**):
+
+- **Ontologies / semantic layers** → the *domain* structure ("what context
+  *should* exist"). Prescriptive, ex-ante.
+- **Trace viewers (Langfuse / LangSmith / Phoenix)** → the *execution* structure
+  (span tree: what called what, timing/nesting). They show a call happened and
+  its I/O — not how the window was *composed* (40% RAG, 30% stale history).
+- **Knowledge / note graphs (GraphRAG, Claude+Obsidian, etc.)** → the
+  *knowledge-base* structure (how documents link). Unrelated to what a specific
+  call actually consumed.
+
+ctxlineage's object is none of these: it is **runtime context lineage** — the
+anatomy of what one call consumed and where each element came from / flowed to.
+That substrate is the only one you can *test*, because testing needs a
+first-class `(context element → call → output)` relation to assert over. This
+is why the dbt analogy holds: dbt didn't invent SQL transforms, it made them an
+*engineered discipline* (versioned, tested, documented, in CI). ctxlineage aims
+to be that for context.
 
 ## One-liner
 
@@ -75,6 +102,21 @@ matter?"*. Complementary, not competing:
 Candidate one-liner: *"Ontologies design the pantry; ctxlineage shows you what
 actually went into the meal."*
 
+## Launch stance (settled #17)
+
+Lead with the **engineering/testing trajectory** (so we don't read as "yet
+another trace viewer"), but stay honest about what ships when — testing is
+v0.2, not v0.1.0:
+
+- **v0.1.0 claims (shipped, defensible today):** runtime context anatomy
+  (window composition, token cost), context lineage (provenance + downstream
+  impact), local-first / zero-server. None of the three "graph" categories
+  above overlaps all three.
+- **The arc we tell (roadmap, not a shipped claim):** from *see & understand*
+  → *engineer & **test***. The README hero uses the engineering framing; a
+  one-line "context testing lands in v0.2" keeps it honest (the honest-data
+  ethos applies to our own marketing too — never sell an unshipped capability).
+
 ## Differentiation levers on the roadmap
 
 - **Agent-native analysis (M4, planned)**: the MCP server lets a coding agent
@@ -87,3 +129,25 @@ actually went into the meal."*
   decision (issue #21).
 - Search/filter across calls (#20), context contract testing (#14), report
   hosting in CI (#9), landing page (#10).
+
+## v0.2 direction (settled #17): two parallel tracks
+
+Post-v0.1.0, run **depth and width together** (both cheap to slice; parallel
+sessions):
+
+- **Depth — context contract testing (#14).** The defensible core and the proof
+  the positioning isn't vapor. Ship one deterministic, LLM-free assertion first
+  (candidate: a *grounding* check — was a tagged element actually consumed by
+  the call? — which requires lineage and so no competitor can copy it; or a
+  *window-budget* assert). Write the design doc during the v0.1.0 release (it
+  doesn't delay the tag) so the announcement can point at a concrete plan.
+- **Width — coding-agent reach via transcript import.** `claude -p` / Claude
+  Code / Codex are **separate non-Python processes**, so the SDK monkey-patch
+  can't capture them — but Claude Code already writes local session transcript
+  JSONL (`~/.claude/projects/.../*.jsonl`; `-p` also emits `--output-format
+  json`). An **importer** (`ctxlineage import --from claude-code`) reads that
+  on-disk artifact into the same report — no server, no runtime hook,
+  local-first-native, and it opens the (large, growing) coding-agent audience.
+  Cheaper and more on-ethos than the OTel-ingestion path (#26), which stays the
+  bridge for tools that emit OTel GenAI spans but not a local transcript.
+  Sequence the two either way; the transcript importer is a 1–2 day PoC.
