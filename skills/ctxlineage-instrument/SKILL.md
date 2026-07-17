@@ -220,6 +220,33 @@ suite with mocked responses is the place to start. A live run needs a
 statistical gate (N runs, a pass rate), which does not exist yet — so keep hard
 gates on recorded runs.
 
+### CLI or pytest plugin?
+
+Both evaluate the *same* `ctxlineage.toml` with the *same* tier rule. They differ
+only in where the check runs and what it can attribute a breach to:
+
+- **`ctxlineage test`** re-reads the JSONL as a separate step. It gates the run
+  as a whole and reports "some call in this log blew the budget". Reach for it
+  when the recorded run comes from outside pytest — a script, `--mock` example,
+  or `ctxlineage import` — or when the user wants one gate over everything.
+- **The pytest plugin** evaluates contracts *inside* the suite that produces the
+  events, and fails **the specific test** whose call breached — the one thing the
+  CLI structurally cannot say. Reach for it when the suite already runs the app
+  under `ctxlineage.init()` and per-test attribution is the point.
+
+  ```bash
+  pytest --ctxlineage        # or set `ctxlineage = true` in pytest.ini / pyproject
+  ```
+
+  It is inert until `--ctxlineage` is passed (installing ctxlineage never changes
+  a shared suite's behaviour). It owns `init()` into a throwaway temp dir unless
+  the app already called `init()` itself, in which case it uses the app's
+  directory. Same tier rule: a breach fails its test, a warning never gates, and
+  a call it could not evaluate is reported as skipped — never a green test.
+  `window_budget` is the rule per-test attribution flatters; a `grounded` tag
+  declared by a session-scoped fixture lives outside a single test's window, so
+  it is most natural over the whole run — that is what `ctxlineage test` is for.
+
 ## Importing coding-agent sessions
 
 If the user wants to inspect a **Claude Code / `claude -p`** session rather than

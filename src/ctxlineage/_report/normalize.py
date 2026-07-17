@@ -30,9 +30,19 @@ MODEL_CONTEXT_WINDOWS = {
 
 def load_events(path: str | os.PathLike) -> tuple[list[dict], int]:
     """Parse a JSONL file; returns (events, skipped_line_count)."""
+    return parse_events(Path(path).read_text(encoding="utf-8"))
+
+
+def parse_events(text: str) -> tuple[list[dict], int]:
+    """Parse JSONL text; returns (events, skipped_line_count).
+
+    Split out from load_events so a reader holding only part of the log — the
+    pytest plugin slices it by byte offset to attribute calls to tests — gets
+    the same parse policy rather than a second copy of it.
+    """
     events: list[dict] = []
     skipped = 0
-    for line in Path(path).read_text(encoding="utf-8").splitlines():
+    for line in text.splitlines():
         if not line.strip():
             continue
         try:

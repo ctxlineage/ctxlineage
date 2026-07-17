@@ -156,6 +156,47 @@ so can your test suite. Live runs need a statistical gate (run N times, assert a
 pass rate) rather than a single hard gate — that is not built yet, so keep hard
 gates on recorded runs.
 
+### Inside pytest, per test (`pytest --ctxlineage`)
+
+The two-step wiring above keeps the events and the assertions in separate
+places, and can only ever fail the *whole* run — "some call in this log blew the
+budget". If your suite already runs the app under `ctxlineage.init()`, the
+bundled pytest plugin evaluates the same `ctxlineage.toml` **inside the suite**
+and fails **the test whose call breached it**:
+
+```bash
+pytest --ctxlineage
+```
+
+```
+FAILED tests/test_agent.py::test_long_loop
+  FAIL  window_budget: ... is 91.4% of the 200,000-token window, over the 80% budget
+```
+
+Per-test attribution is the whole reason to prefer it over `ctxlineage test`;
+that is the one thing the CLI cannot do. Everything else is identical — same
+config, same tier rule (a warning never gates, an unevaluated call is reported
+as skipped, never a green test). It is **inert until you pass `--ctxlineage`**
+(installing ctxlineage never changes a suite's behaviour), or you can commit the
+choice:
+
+```toml
+# pyproject.toml
+[tool.pytest.ini_options]
+addopts = "--ctxlineage"
+```
+
+The plugin owns `ctxlineage.init()` into a throwaway temp dir for the run, unless
+your app already called `init()` — then it uses your app's directory and leaves
+capture alone. `ctxlineage test` is still the tool for a recorded run produced
+*outside* pytest (a script, a `--mock` example, `ctxlineage import`), and for a
+`grounded` tag declared once for the whole run rather than inside one test.
+
+| | Gate granularity | Recorded run comes from |
+| --- | --- | --- |
+| `ctxlineage test` | the whole run | anywhere — a script, an example, an import |
+| `pytest --ctxlineage` | **the individual test** | the suite itself, as it runs |
+
 ## Importing coding-agent sessions (`ctxlineage import`)
 
 Claude Code and `claude -p` are separate, non-Python processes, so

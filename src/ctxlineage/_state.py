@@ -55,6 +55,16 @@ def is_configured() -> bool:
     return _writer is not None
 
 
+def events_path():
+    """Where capture is writing, or None when unconfigured.
+
+    Lets a reader in this process find the log without being told: the pytest
+    plugin uses it to honour an app that called init() itself instead of
+    overriding the directory the app chose.
+    """
+    return _writer.path if _writer is not None else None
+
+
 def session_id() -> str | None:
     return _session_id
 
