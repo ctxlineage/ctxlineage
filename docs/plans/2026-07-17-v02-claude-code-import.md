@@ -72,23 +72,58 @@ Establish these by absence, and **disclose rather than invent**:
   transcript. It is a large share of the real prompt tokens.
 - **Tool definitions.** The `tools` array (Read/Edit/Bash/…) is not in the
   transcript, and it too consumes real window tokens.
+- **Reasoning text.** Thinking blocks are written with their `signature` but
+  with `thinking: ""` — **887 of 887 blocks across every local session were
+  empty**. The shape survives; the text is gone. It was really re-sent on later
+  turns and really cost tokens, so an empty string here must not be read as
+  "there was nothing to think about".
 - **Request params** — `temperature`, `max_tokens`, `top_p`, `stop_sequences`,
   `cache_control` breakpoints.
 - **`duration_ms`** — records carry a single timestamp, not request start/end.
 - Any send-time injection (reminders etc.) not echoed into a record.
 
 **The disclosure is quantified, not hand-waved.** We know the *real* prompt size
-(`usage`, fact 3) and we know the size of what we could reconstruct (sum of
-segment `tokens_est`). The difference is exactly the unpreserved system prompt +
-tool definitions:
+(`usage`, fact 3) and the size of what we could reconstruct (Σ segment
+`tokens_est`):
 
 ```
-unaccounted_tokens = usage.prompt_tokens − Σ segment.tokens_est
+unaccounted_prompt_tokens = usage.prompt_tokens − Σ segment.tokens_est
 ```
 
-So the importer *measures* the gap instead of hiding it. That is the feature.
-We do **not** synthesize a placeholder system segment — that would be inventing
-data.
+Measured on a real 54-call session, the gap decomposes cleanly and confirms the
+list above:
+
+- **33,313 tokens, constant** — call 1's prompt was 33,631 tokens while its only
+  reconstructable message was 318. With no thinking blocks yet in play, that
+  residue is the system prompt + tool definitions.
+- **~923 tokens × (stripped thinking blocks so far)** — the rest, growing with
+  the conversation. Correlation between the stripped-block count and the excess
+  over that constant is **r = 0.9929** across all 54 calls.
+
+So the importer *measures* the gap instead of hiding it. That is the feature. We
+do **not** synthesize a placeholder system segment — the size is known but the
+content is not, and inventing content is what we are avoiding.
+
+**Never sum `unaccounted_prompt_tokens` across calls.** Each prompt re-sends the
+whole conversation, so the per-call gaps overlap almost entirely; summing the
+sampled session yields 3.4M, a number corresponding to nothing real. Report
+coverage per call instead (that session: 1%–32%).
+
+### Known limitation: the report understates this (follow-up, not this PR)
+
+The report sizes each segment's share against the *sum of the segments*, not
+against `usage.prompt_tokens`. The two coincide for captured SDK calls, where
+the request is fully visible. For an imported call they diverge hard: the
+anatomy view renders "user input · 318 tok · 100%" while its own header
+correctly reads "input 33,631 tok". The 99% we cannot reconstruct is simply
+absent from the bars.
+
+Fixing it means rendering the unaccounted remainder as an explicit
+"not preserved by the transcript" band — which is disclosure, not fabrication,
+since `usage` gives its exact size. But that changes `normalize`/the report for
+every provider, so it is out of scope for a reader+mapper PoC and belongs in its
+own issue. Until then the gap is disclosed in `payload["import"]` and on the
+import CLI's stdout.
 
 ### Estimated vs reconstructed
 
@@ -106,11 +141,13 @@ on that convention rather than inventing a second one.
 "import": {
   "source": "claude-code",
   "transcript": "<path>",
-  "session_id": "<uuid>",
-  "usage": "reconstructed",          // real API numbers from the transcript
-  "segment_tokens": "estimated",     // tiktoken approximation
-  "not_preserved": ["system_prompt", "tool_definitions", "request_params", "duration_ms"],
-  "unaccounted_prompt_tokens": 21437 // real prompt_tokens − Σ reconstructed segments
+  "usage": "reconstructed",           // real API numbers, verbatim ("unavailable" if absent)
+  "segment_tokens": "estimated",      // tiktoken approximation
+  "not_preserved": ["system_prompt", "tool_definitions", "reasoning_text", ...],
+  "reasoning_blocks_stripped": 11,    // thinking blocks in this prompt whose text is gone
+  "prompt_tokens_reported": 63523,    // real
+  "prompt_tokens_reconstructed_est": 14250,
+  "unaccounted_prompt_tokens": 49273  // signed; never sum across calls
 }
 ```
 
