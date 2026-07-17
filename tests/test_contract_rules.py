@@ -1,0 +1,363 @@
+"""Rule behaviour, exercised over real `build_report_data` output.
+
+Fixtures are built from synthetic *events* and pushed through the real pipeline
+rather than hand-written report dicts: the rules' whole premise (§14) is that
+they only read what the report pipeline already produces, so the tests must
+break if that shape drifts.
+"""
+
+from __future__ import annotations
+
+from ctxlineage._contract import runner
+from ctxlineage._contract.rules import Grounded, WindowBudget
+from ctxlineage._report import normalize
+
+CHUNK = "ALPHA-CHUNK-CONTENT-ONE: ctxlineage records every call locally."
+LONG_ANSWER = "This answer is long enough to count as lineage evidence."
+
+
+def _llm_call(
+    call_id,
+    *,
+    session="s1",
+    span=None,
+    model="gpt-4o-mini",
+    messages=None,
+    usage=None,
+    answer=None,
+    ts="2026-07-17T00:00:00+00:00",
+):
+    payload = {
+        "provider": "openai",
+        "api": "chat.completions",
+        "request": {"model": model, "messages": messages or []},
+        "stream": False,
+    }
+    if usage is not None:
+        payload["usage"] = usage
+    if answer is not None:
+        payload["response"] = {
+            "object": "chat.completion",
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {"role": "assistant", "content": answer},
+                    "finish_reason": "stop",
+                }
+            ],
+        }
+    return {
+        "schema_version": 1,
+        "event_type": "llm_call",
+        "session_id": session,
+        "span_id": span,
+        "call_id": call_id,
+        "timestamp": ts,
+        "payload": payload,
+    }
+
+
+def _span_start(span, name, *, session="s1"):
+    return {
+        "schema_version": 1,
+        "event_type": "span_start",
+        "session_id": session,
+        "span_id": span,
+        "call_id": None,
+        "timestamp": "2026-07-16T23:59:00+00:00",
+        "payload": {"name": name},
+    }
+
+
+def _tag(span, name, content, *, session="s1", source=None):
+    payload = {"name": name, "content": content}
+    if source:
+        payload["source"] = source
+    return {
+        "schema_version": 1,
+        "event_type": "tag",
+        "session_id": session,
+        "span_id": span,
+        "call_id": None,
+        "timestamp": "2026-07-16T23:59:01+00:00",
+        "payload": payload,
+    }
+
+
+def _data(*events):
+    return normalize.build_report_data(list(events))
+
+
+def _sev(findings, severity):
+    return [f for f in findings if f.severity == severity]
+
+
+def _messages(findings):
+    return " | ".join(f.message for f in findings)
+
+
+# --------------------------------------------------------------------------
+# window_budget — deterministic from capture alone, hard-gates without tags
+# --------------------------------------------------------------------------
+
+
+def test_window_budget_fails_when_over_threshold():
+    data = _data(_llm_call("c1", usage={"prompt_tokens": 120_000, "completion_tokens": 10}))
+    findings = runner.run(data, [WindowBudget(max_pct=80)])
+    assert len(_sev(findings, "fail")) == 1
+    assert "c1" in _messages(findings)
+
+
+def test_window_budget_passes_when_under_threshold():
+    data = _data(_llm_call("c1", usage={"prompt_tokens": 1_000, "completion_tokens": 10}))
+    assert runner.run(data, [WindowBudget(max_pct=80)]) == []
+
+
+def test_window_budget_gates_untagged_calls():
+    """The tagless on-ramp (§6/§14): no span, no tag, still a hard gate."""
+    data = _data(_llm_call("c1", span=None, usage={"prompt_tokens": 120_000}))
+    findings = runner.run(data, [WindowBudget(max_pct=80)])
+    assert _sev(findings, "fail")
+
+
+def test_window_budget_prefers_real_usage_over_the_estimate():
+    # Huge prompt text (est. ~125k tokens => over budget) but the provider
+    # reported a small real usage: the real number must win, so this passes.
+    messages = [{"role": "user", "content": "word " * 100_000}]
+    data = _data(_llm_call("c1", messages=messages, usage={"prompt_tokens": 1_000}))
+    assert runner.run(data, [WindowBudget(max_pct=80)]) == []
+
+
+def test_window_budget_falls_back_to_the_estimate_without_usage():
+    messages = [{"role": "user", "content": "word " * 100_000}]
+    data = _data(_llm_call("c1", messages=messages))
+    findings = runner.run(data, [WindowBudget(max_pct=80)])
+    assert _sev(findings, "fail")
+    assert "est." in _messages(findings)
+
+
+def test_window_budget_segment_scope_sums_only_that_kind():
+    messages = [
+        {"role": "system", "content": "short system prompt"},
+        {"role": "assistant", "content": "word " * 20_000},  # ~25k tokens ≈ 19.5%
+    ]
+    data = _data(_llm_call("c1", messages=messages, usage={"prompt_tokens": 120_000}))
+
+    over = runner.run(data, [WindowBudget(max_pct=10, segment="assistant")])
+    assert _sev(over, "fail"), "assistant segment is ~19.5% of the window"
+
+    under = runner.run(data, [WindowBudget(max_pct=10, segment="system")])
+    assert under == [], "system segment is a handful of tokens"
+
+
+def test_segment_scope_ignores_real_usage_and_says_so():
+    """Real usage is only ever a per-call total, so a segment budget is an
+    estimate — the message must not let it read as measured."""
+    messages = [{"role": "assistant", "content": "word " * 100_000}]
+    data = _data(_llm_call("c1", messages=messages, usage={"prompt_tokens": 10}))
+    findings = runner.run(data, [WindowBudget(max_pct=80, segment="assistant")])
+    assert _sev(findings, "fail")
+    assert "est." in _messages(findings)
+
+
+def test_unknown_context_window_skips_rather_than_passes():
+    """An unknown window cannot produce a percentage; silently passing an
+    unevaluated call is the failure mode this track exists to prevent."""
+    data = _data(_llm_call("c1", model="mystery-model-9", usage={"prompt_tokens": 999_999}))
+    findings = runner.run(data, [WindowBudget(max_pct=80)])
+    assert _sev(findings, "fail") == []
+    assert len(_sev(findings, "skip")) == 1
+    assert "mystery-model-9" in _messages(findings)
+
+
+def test_segment_selector_matching_nothing_warns_rather_than_passes():
+    """§14 sketches `segment = "history"`, which is not a kind the pipeline
+    produces — a typo'd selector must not look green forever."""
+    data = _data(_llm_call("c1", messages=[{"role": "user", "content": "hi"}]))
+    findings = runner.run(data, [WindowBudget(max_pct=40, segment="history")])
+    assert _sev(findings, "fail") == []
+    assert len(_sev(findings, "warn")) == 1
+    assert "history" in _messages(findings)
+
+
+def test_segment_absent_from_one_call_is_a_real_pass():
+    """Per-call absence is a legitimate 0%: only a run-wide miss is suspicious."""
+    data = _data(
+        _llm_call("c1", messages=[{"role": "user", "content": "hi"}]),
+        _llm_call(
+            "c2", messages=[{"role": "system", "content": "sys"}], ts="2026-07-17T00:00:01+00:00"
+        ),
+    )
+    assert runner.run(data, [WindowBudget(max_pct=40, segment="system")]) == []
+
+
+# --------------------------------------------------------------------------
+# grounded — presence (hard gate, tag = exact lineage)
+# --------------------------------------------------------------------------
+
+
+def test_grounded_presence_passes_when_the_tag_landed():
+    data = _data(
+        _span_start("sp1", "answer"),
+        _tag("sp1", "rag_chunks", CHUNK, source="qdrant:docs"),
+        _llm_call("c1", span="sp1", messages=[{"role": "user", "content": f"Context:\n{CHUNK}"}]),
+    )
+    assert runner.run(data, [Grounded(tag="rag_chunks")]) == []
+
+
+def test_grounded_presence_hard_fails_when_the_tag_never_landed():
+    """The tag is a declaration, so 'it never reached the window' is exact."""
+    data = _data(
+        _span_start("sp1", "answer"),
+        _tag("sp1", "memory", "user prefers concise answers"),
+        _llm_call("c1", span="sp1", messages=[{"role": "user", "content": "unrelated prompt"}]),
+    )
+    findings = runner.run(data, [Grounded(tag="memory")])
+    assert len(_sev(findings, "fail")) == 1
+    assert "memory" in _messages(findings)
+
+
+# --------------------------------------------------------------------------
+# grounded — the tier rule (§6): no tag => inferred lineage => advisory
+# --------------------------------------------------------------------------
+
+
+def test_grounded_demotes_to_a_warning_when_the_tag_is_absent():
+    """The load-bearing tier behaviour: with nothing declared there is no exact
+    lineage, so grounded must warn instead of gating. Mixing these tiers is
+    what makes a gate flaky and the positioning dishonest."""
+    data = _data(_llm_call("c1", messages=[{"role": "user", "content": "no tags here"}]))
+    findings = runner.run(data, [Grounded(tag="rag_chunks")])
+    assert _sev(findings, "fail") == []
+    assert len(_sev(findings, "warn")) == 1
+    assert "rag_chunks" in _messages(findings)
+
+
+def test_grounded_demotion_mentions_how_to_earn_the_gate():
+    data = _data(_llm_call("c1", messages=[{"role": "user", "content": "no tags here"}]))
+    (warning,) = _sev(runner.run(data, [Grounded(tag="rag_chunks")]), "warn")
+    assert "tag" in warning.message.lower()
+
+
+# --------------------------------------------------------------------------
+# grounded — dead context (advisory always: edges are inferred)
+# --------------------------------------------------------------------------
+
+
+def _dead_context_events(*, follow_up_content, follow_up_span=None):
+    return (
+        _span_start("sp1", "answer"),
+        _tag("sp1", "rag_chunks", CHUNK, source="qdrant:docs"),
+        _llm_call(
+            "c1",
+            span="sp1",
+            messages=[{"role": "user", "content": f"Context:\n{CHUNK}"}],
+            answer=LONG_ANSWER,
+            ts="2026-07-17T00:00:00+00:00",
+        ),
+        _llm_call(
+            "c2",
+            span=follow_up_span,
+            messages=[{"role": "user", "content": follow_up_content}],
+            answer="Second answer, also long enough.",
+            ts="2026-07-17T00:00:01+00:00",
+        ),
+    )
+
+
+def test_dead_context_warns_when_no_downstream_call_used_the_output():
+    data = _data(*_dead_context_events(follow_up_content="A totally unrelated follow-up."))
+    findings = runner.run(data, [Grounded(tag="rag_chunks", warn_dead=True)])
+    assert _sev(findings, "fail") == []
+    assert len(_sev(findings, "warn")) == 1
+    assert "rag_chunks" in _messages(findings)
+
+
+def test_dead_context_is_quiet_when_the_output_flowed_downstream():
+    data = _data(*_dead_context_events(follow_up_content=f"Earlier: {LONG_ANSWER}\nNow what?"))
+    assert runner.run(data, [Grounded(tag="rag_chunks", warn_dead=True)]) == []
+
+
+def test_same_span_adjacency_alone_is_not_evidence_of_influence():
+    """A same_span edge means two calls shared a span, not that anything flowed."""
+    data = _data(
+        *_dead_context_events(follow_up_content="Unrelated follow-up.", follow_up_span="sp1")
+    )
+    assert len(_sev(runner.run(data, [Grounded(tag="rag_chunks", warn_dead=True)]), "warn")) == 1
+
+
+def test_terminal_consumer_is_not_dead_context():
+    """A single-call RAG app: the chunks fed the answer and the answer went to
+    the user. There is no downstream to influence, so 'dead' is vacuous —
+    flagging it would be the noise that discredits the signal."""
+    data = _data(
+        _span_start("sp1", "answer"),
+        _tag("sp1", "rag_chunks", CHUNK),
+        _llm_call(
+            "c1", span="sp1", messages=[{"role": "user", "content": CHUNK}], answer=LONG_ANSWER
+        ),
+    )
+    assert runner.run(data, [Grounded(tag="rag_chunks", warn_dead=True)]) == []
+
+
+def test_dead_context_is_off_by_default():
+    data = _data(*_dead_context_events(follow_up_content="A totally unrelated follow-up."))
+    assert runner.run(data, [Grounded(tag="rag_chunks")]) == []
+
+
+def test_dead_context_never_hard_gates():
+    """Edges are inferred (§6), so this can only ever advise."""
+    data = _data(*_dead_context_events(follow_up_content="A totally unrelated follow-up."))
+    findings = runner.run(data, [Grounded(tag="rag_chunks", warn_dead=True)])
+    assert all(f.severity != "fail" for f in findings)
+
+
+def test_dead_context_declares_itself_unreliable_when_edges_were_truncated():
+    data = _data(*_dead_context_events(follow_up_content="A totally unrelated follow-up."))
+    data["sessions"][0]["edges_truncated"] = True
+    (warning,) = _sev(runner.run(data, [Grounded(tag="rag_chunks", warn_dead=True)]), "warn")
+    assert "unreliable" in warning.message
+
+
+def test_unmatched_tag_reports_presence_only_not_dead_context():
+    """One root cause, one finding: content that never landed is a presence
+    failure, not additionally 'dead'."""
+    data = _data(
+        _span_start("sp1", "answer"),
+        _tag("sp1", "rag_chunks", CHUNK),
+        _llm_call("c1", span="sp1", messages=[{"role": "user", "content": "nothing relevant"}]),
+        _llm_call(
+            "c2", messages=[{"role": "user", "content": "more"}], ts="2026-07-17T00:00:01+00:00"
+        ),
+    )
+    findings = runner.run(data, [Grounded(tag="rag_chunks", warn_dead=True)])
+    assert len(findings) == 1
+    assert findings[0].severity == "fail"
+
+
+# --------------------------------------------------------------------------
+# runner
+# --------------------------------------------------------------------------
+
+
+def test_runner_reports_findings_from_every_rule():
+    data = _data(
+        _span_start("sp1", "answer"),
+        _tag("sp1", "memory", "never injected"),
+        _llm_call(
+            "c1",
+            span="sp1",
+            messages=[{"role": "user", "content": "hi"}],
+            usage={"prompt_tokens": 120_000},
+        ),
+    )
+    findings = runner.run(data, [WindowBudget(max_pct=80), Grounded(tag="memory")])
+    assert {f.rule for f in findings} == {"window_budget", "grounded"}
+    assert len(_sev(findings, "fail")) == 2
+
+
+def test_has_failures_only_counts_hard_gates():
+    warn = runner.Finding(rule="grounded", severity="warn", message="advisory")
+    skip = runner.Finding(rule="window_budget", severity="skip", message="unknown window")
+    assert runner.has_failures([warn, skip]) is False
+    assert runner.has_failures([warn, runner.Finding("grounded", "fail", "boom")]) is True

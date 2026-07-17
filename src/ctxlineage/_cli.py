@@ -9,6 +9,7 @@ from pathlib import Path
 
 import click
 
+from ctxlineage import _contract
 from ctxlineage._report import html, normalize, redact
 
 
@@ -82,3 +83,62 @@ def report(
     click.echo(f"Wrote {out_path} ({summary})")
     if open_browser:
         webbrowser.open(out_path.resolve().as_uri())
+
+
+@main.command()
+@click.option(
+    "--dir",
+    "-d",
+    "directory",
+    default=".ctxlineage",
+    show_default=True,
+    help="Directory containing events.jsonl.",
+)
+@click.option(
+    "--config",
+    "-c",
+    "config_path",
+    default="ctxlineage.toml",
+    show_default=True,
+    help="Assertion config (TOML).",
+)
+def test(directory: str, config_path: str) -> None:
+    """Assert context contracts over recorded events.
+
+    Exits non-zero when a hard gate fails, so it works as a CI gate. Warnings
+    are advisory and never fail the build: a rule warns instead of gating where
+    its evidence is inferred rather than exact.
+    """
+    try:
+        rules = _contract.load(config_path)
+    except _contract.ConfigError as exc:
+        raise click.ClickException(str(exc)) from exc
+
+    events_path = Path(directory) / "events.jsonl"
+    if not events_path.exists():
+        raise click.ClickException(
+            f"No events found at {events_path}. "
+            "Run your app with ctxlineage.init() first (or pass --dir)."
+        )
+    events, skipped = normalize.load_events(events_path)
+    data = normalize.build_report_data(events)
+    if not data["stats"]["calls"]:
+        # Passing over an empty capture would report green for a broken capture.
+        raise click.ClickException(
+            f"No LLM calls recorded in {events_path} - nothing to assert."
+            + (f" ({skipped} malformed line(s) skipped.)" if skipped else "")
+        )
+
+    findings = _contract.run(data, rules)
+    for finding in findings:
+        click.echo(f"{finding.severity.upper():<4}  {finding.rule}: {finding.message}")
+
+    counts = {
+        level: sum(1 for f in findings if f.severity == level) for level in ("fail", "warn", "skip")
+    }
+    tail = f"{counts['warn']} warning(s), {counts['skip']} skipped"
+    scope = f"{len(rules)} assertion(s) over {data['stats']['calls']} call(s)"
+    if _contract.has_failures(findings):
+        click.echo(f"{counts['fail']} check(s) failed - {scope}, {tail}")
+        raise SystemExit(1)
+    click.echo(f"All {scope} passed - {tail}")

@@ -1,0 +1,137 @@
+"""`ctxlineage.toml` loading and validation.
+
+Validation is strict — unknown rule names and unknown keys are errors, never
+ignored. A silently-ignored typo in a CI gate config is a gate that passes for
+the wrong reason, which is worse than having no gate at all.
+
+    [[assert.window_budget]]
+    max_pct = 80
+
+    [[assert.window_budget]]
+    segment = "assistant"
+    max_pct = 40
+
+    [[assert.grounded]]
+    tag = "rag_chunks"
+    warn_dead = true
+"""
+
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+from ctxlineage._contract.rules import Grounded, WindowBudget
+
+if sys.version_info >= (3, 11):
+    import tomllib
+else:  # 3.10 has no tomllib; tomli is the same API (and became tomllib)
+    import tomli as tomllib
+
+
+class ConfigError(Exception):
+    """Malformed or unreadable ctxlineage.toml."""
+
+
+def load(path) -> list:
+    """Parse and validate a config file into rule objects."""
+    path = Path(path)
+    if not path.exists():
+        raise ConfigError(
+            f"Config not found: {path}. Create one with e.g.\n\n"
+            "  [[assert.window_budget]]\n  max_pct = 80\n"
+        )
+    try:
+        raw = tomllib.loads(path.read_text(encoding="utf-8"))
+    except tomllib.TOMLDecodeError as exc:
+        raise ConfigError(f"{path} is not valid TOML: {exc}") from exc
+    return parse(raw, source=str(path))
+
+
+def parse(raw: dict, source: str = "ctxlineage.toml") -> list:
+    section = raw.get("assert")
+    if section is None:
+        raise ConfigError(
+            f"{source}: no [assert] section, so there is nothing to test. Add e.g.\n\n"
+            "  [[assert.window_budget]]\n  max_pct = 80\n"
+        )
+    if not isinstance(section, dict):
+        raise ConfigError(f"{source}: [assert] must be a table")
+
+    rules: list = []
+    for name, entries in section.items():
+        parser = _PARSERS.get(name)
+        if parser is None:
+            raise ConfigError(
+                f"{source}: unknown rule '{name}' - built-in rules are: "
+                f"{', '.join(sorted(_PARSERS))}"
+            )
+        if not isinstance(entries, list):
+            raise ConfigError(
+                f"{source}: [assert.{name}] must be a table array - write [[assert.{name}]] "
+                f"with double brackets"
+            )
+        for index, entry in enumerate(entries):
+            where = f"{source}: assert.{name}[{index}]"
+            if not isinstance(entry, dict):
+                raise ConfigError(f"{where}: must be a table")
+            rules.append(parser(entry, where))
+    if not rules:
+        raise ConfigError(f"{source}: no assertions configured under [assert]")
+    return rules
+
+
+def _reject_unknown(entry: dict, allowed: set, where: str) -> None:
+    unknown = sorted(set(entry) - allowed)
+    if unknown:
+        raise ConfigError(
+            f"{where}: unknown key '{unknown[0]}' - allowed keys are: {', '.join(sorted(allowed))}"
+        )
+
+
+def _number(entry: dict, key: str, where: str):
+    value = entry[key]
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ConfigError(f"{where}: {key} must be a number, got {value!r}")
+    return value
+
+
+def _string(entry: dict, key: str, where: str) -> str:
+    value = entry[key]
+    if not isinstance(value, str):
+        raise ConfigError(f"{where}: {key} must be a string, got {value!r}")
+    if not value.strip():
+        raise ConfigError(f"{where}: {key} must not be empty")
+    return value
+
+
+def _parse_window_budget(entry: dict, where: str) -> WindowBudget:
+    _reject_unknown(entry, {"max_pct", "segment"}, where)
+    if "max_pct" not in entry:
+        raise ConfigError(f"{where}: max_pct is required")
+    max_pct = _number(entry, "max_pct", where)
+    if not 0 < max_pct <= 100:
+        raise ConfigError(
+            f"{where}: max_pct must be greater than 0 and at most 100, got {max_pct!r}"
+        )
+    segment = _string(entry, "segment", where) if "segment" in entry else None
+    return WindowBudget(max_pct=max_pct, segment=segment)
+
+
+def _parse_grounded(entry: dict, where: str) -> Grounded:
+    _reject_unknown(entry, {"tag", "warn_dead"}, where)
+    if "tag" not in entry:
+        raise ConfigError(f"{where}: tag is required")
+    tag = _string(entry, "tag", where)
+    warn_dead = entry.get("warn_dead", False)
+    if not isinstance(warn_dead, bool):
+        raise ConfigError(f"{where}: warn_dead must be a boolean, got {warn_dead!r}")
+    return Grounded(tag=tag, warn_dead=warn_dead)
+
+
+# Built-in relations only. A plugin hook (§12) would register here; nothing
+# third-party loads in this slice.
+_PARSERS = {
+    WindowBudget.NAME: _parse_window_budget,
+    Grounded.NAME: _parse_grounded,
+}
