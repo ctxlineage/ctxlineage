@@ -217,6 +217,36 @@ def test_snapshot_copies_reference_cycles():
     assert snapshot["self"] is snapshot  # the cycle is preserved in the copy
 
 
+def test_undumpable_chunk_falls_back_to_repr_and_reaches_the_host(capture):
+    """A chunk whose model_dump raises costs the recording detail, never the host.
+
+    Driven through StreamProxy directly: no SDK ships a chunk that behaves this
+    way, but the fallback exists precisely for the one that eventually does.
+    """
+    from ctxlineage._instrument._common import StreamProxy
+
+    class HostileChunk:
+        def model_dump(self, mode=None):
+            raise RuntimeError("this chunk refuses to dump")
+
+        def __repr__(self):
+            return "<HostileChunk>"
+
+    chunk = HostileChunk()
+
+    class FakeStream:
+        def __iter__(self):
+            return iter([chunk])
+
+    def assemble(chunks):
+        return {"object": "test.assembled", "usage": None, "chunk_count": len(chunks)}
+
+    proxy = StreamProxy(FakeStream(), {"provider": "test", "stream": True}, assemble)
+    assert list(proxy) == [chunk]  # the host gets the real object, not the fallback
+    (event,) = capture()
+    assert event["payload"]["response"]["chunk_count"] == 1  # still counted, still recorded
+
+
 # --- #35: the async twins of the abandonment paths above ---
 
 

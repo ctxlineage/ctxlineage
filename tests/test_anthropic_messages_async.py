@@ -277,6 +277,51 @@ async def test_async_multi_block_stream_degrades_but_stays_accurate(
 
 
 @respx.mock
+async def test_async_with_on_create_stream_records_partial_promptly(
+    capture, async_client, messages_stream_body
+):
+    """`async with` over a raw create(stream=True) proxy: __aenter__/__aexit__.
+
+    The sync twin (`with stream:`) has covered these slots since M1. Unlike a
+    bare `async for` + break, whose recording waits for the loop to finalize the
+    async generator, __aexit__ runs the finish path inline — so the partial is
+    recorded by the time the block is left, with no loop tick needed.
+    """
+    _mock_stream(messages_stream_body)
+    stream = await _create_stream(async_client)
+    async with stream as entered:
+        assert entered is stream  # __aenter__ returns the proxy, not the raw stream
+        n = 0
+        async for _chunk in entered:
+            n += 1
+            if n == 3:  # message_start, content_block_start, first text delta
+                break
+    (event,) = capture()  # already recorded: no awaiting the loop
+    assert event["payload"]["response"]["content"]["0"] == "Hello"
+    assert event["payload"]["response"]["chunk_count"] == 3
+    assert "abandoned" not in event["payload"]  # exited deliberately, not dropped
+
+
+@respx.mock
+async def test_async_anext_to_exhaustion_records_once(capture, async_client, messages_stream_body):
+    """Driving __anext__ to StopAsyncIteration is a complete consumption, not an abandon."""
+    _mock_stream(messages_stream_body)
+    stream = await _create_stream(async_client)
+    pulled = 0
+    with pytest.raises(StopAsyncIteration):
+        while True:
+            await stream.__anext__()
+            pulled += 1
+    assert pulled == 7
+    del stream
+    gc.collect()  # StopAsyncIteration already finished it; the finalizer must not re-record
+    (event,) = capture()
+    assert "abandoned" not in event["payload"]
+    assert event["payload"]["response"]["content"]["0"] == "Hello world"
+    assert event["payload"]["response"]["chunk_count"] == 7
+
+
+@respx.mock
 async def test_async_stream_helper_multi_block_final_message_stays_intact(
     capture, async_client, messages_tool_use_stream_body
 ):

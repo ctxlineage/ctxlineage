@@ -167,6 +167,38 @@ def test_builtin_next_partial_then_close_records(capture, anthropic_client, mess
 
 
 @respx.mock
+def test_builtin_next_to_exhaustion_records_once(capture, anthropic_client, messages_stream_body):
+    """StopIteration out of __next__ is a complete consumption, not an abandon."""
+    _mock_stream(messages_stream_body)
+    stream = _create_stream(anthropic_client)
+    pulled = 0
+    with pytest.raises(StopIteration):
+        while True:
+            next(stream)
+            pulled += 1
+    assert pulled == 7
+    (event,) = capture()
+    assert "abandoned" not in event["payload"]
+    assert event["payload"]["response"]["content"]["0"] == "Hello world"
+    assert event["payload"]["response"]["chunk_count"] == 7
+
+
+@respx.mock
+def test_builtin_next_mid_stream_error_recorded(
+    capture, anthropic_client, messages_error_stream_body
+):
+    """__next__ has its own error branch, separate from __iter__'s."""
+    _mock_stream(messages_error_stream_body)
+    stream = _create_stream(anthropic_client)
+    with pytest.raises(anthropic.APIStatusError):
+        while True:
+            next(stream)
+    (event,) = capture()
+    assert event["payload"]["error"]["type"] == "APIStatusError"
+    assert event["payload"]["response"]["content"]["0"] == "Hello"  # partial kept
+
+
+@respx.mock
 def test_multi_block_stream_degrades_but_stays_accurate(
     capture, anthropic_client, validate_event, messages_tool_use_stream_body
 ):
