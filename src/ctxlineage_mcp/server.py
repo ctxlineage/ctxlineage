@@ -9,6 +9,7 @@ is generate_report's HTML artifact, same as the CLI.
 from __future__ import annotations
 
 import copy
+import threading
 from pathlib import Path
 
 import click
@@ -38,6 +39,10 @@ class _EventStore:
         self._cache_key: tuple[int, int] | None = None
         self._data: dict | None = None
         self.skipped_lines = 0
+        # FastMCP runs sync tools on a thread pool; serialize the
+        # check-reload-and-cache so concurrent calls can't interleave a parse
+        # with a half-updated (_data, _cache_key, skipped_lines).
+        self._lock = threading.Lock()
 
     @property
     def events_path(self) -> Path:
@@ -52,12 +57,13 @@ class _EventStore:
             )
         stat = path.stat()
         key = (stat.st_mtime_ns, stat.st_size)
-        if key != self._cache_key:
-            events, self.skipped_lines = normalize.load_events(path)
-            self._data = normalize.build_report_data(events)
-            self._cache_key = key
-        assert self._data is not None
-        return self._data
+        with self._lock:
+            if key != self._cache_key:
+                events, self.skipped_lines = normalize.load_events(path)
+                self._data = normalize.build_report_data(events)
+                self._cache_key = key
+            assert self._data is not None
+            return self._data
 
 
 _store = _EventStore()
@@ -178,25 +184,28 @@ def _element_lineage(session: dict, element: dict) -> dict:
 
 
 @mcp.tool()
-def get_lineage(id: str) -> dict:
-    """Trace lineage for a call_id or an element_id (span_id:name; a bare tag
-    name works when unambiguous). Calls: elements consumed, edges in/out, and
-    the transitive downstream calls their output flowed into. Elements: the
-    calls that consumed them and everything downstream (impact analysis)."""
+def get_lineage(node_id: str) -> dict:
+    """Trace lineage for a node_id — a call_id or an element_id (span_id:name;
+    a bare tag name works when unambiguous). Calls: elements consumed, edges
+    in/out, and the transitive downstream calls their output flowed into.
+    Elements: the calls that consumed them and everything downstream (impact
+    analysis)."""
     data = _store.report_data()
-    found = _find_call(data, id)
+    found = _find_call(data, node_id)
     if found:
         session, call = found
-        edges_in = [e for e in session["edges"] if e["to"] == id]
-        edges_out = [e for e in session["edges"] if e["from"] == id]
+        edges_in = [e for e in session["edges"] if e["to"] == node_id]
+        edges_out = [e for e in session["edges"] if e["from"] == node_id]
         node = {k: call[k] for k in ("id", "span_id", "step", "timestamp", "model", "error")}
         node["type"] = "call"
-        downstream, downstream_truncated = _downstream_ids(session["edges"], [id])
+        downstream, downstream_truncated = _downstream_ids(session["edges"], [node_id])
         return {
             "session_id": session["id"],
             "node": node,
             "elements_consumed": [
-                {"element_id": _element_id(e), **e} for e in session["elements"] if id in e["calls"]
+                {"element_id": _element_id(e), **e}
+                for e in session["elements"]
+                if node_id in e["calls"]
             ],
             "edges_in": edges_in,
             "edges_out": edges_out,
@@ -208,14 +217,14 @@ def get_lineage(id: str) -> dict:
         (session, element)
         for session in data["sessions"]
         for element in session["elements"]
-        if _element_id(element) == id or element["name"] == id
+        if _element_id(element) == node_id or element["name"] == node_id
     ]
     if len(matches) > 1:
         candidates = ", ".join(_element_id(e) for _, e in matches)
-        raise ValueError(f"Ambiguous element name {id!r} — use an element_id: {candidates}")
+        raise ValueError(f"Ambiguous element name {node_id!r} — use an element_id: {candidates}")
     if not matches:
         raise ValueError(
-            f"Unknown id {id!r} (no call or element). Use list_sessions to see valid ids."
+            f"Unknown node_id {node_id!r} (no call or element). Use list_sessions to see valid ids."
         )
     return _element_lineage(*matches[0])
 

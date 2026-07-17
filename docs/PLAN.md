@@ -79,7 +79,7 @@ The HTML has two views:
 
 **(c) Official integrations (for Claude Code / Codex)**
 
-- **MCP server (`ctxlineage-mcp`):** runs over stdio. Exposes tools: `list_sessions` / `get_call(call_id)` / `get_lineage(element_id)` / `generate_report`. Lets coding agents do analyses like "read the context breakdown of the latest call and point out waste".
+- **MCP server (`ctxlineage-mcp`):** runs over stdio. Exposes tools: `list_sessions` / `get_call(call_id)` / `get_lineage(node_id)` / `generate_report`. Lets coding agents do analyses like "read the context breakdown of the latest call and point out waste".
 - **Agent Skill (`skills/ctxlineage-instrument/SKILL.md`):** a procedure document so an agent told "add ctxlineage to this project" correctly decides where to insert `init`, tags the main context-assembly sites, and generates a report. Bundled in the repo.
 
 ### v1.5 — Tag API expansion & integrations
