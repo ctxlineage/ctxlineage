@@ -143,7 +143,11 @@ def test(directory: str, config_path: str) -> None:
     if _contract.has_failures(findings):
         click.echo(f"{counts['fail']} check(s) failed - {scope}, {tail}")
         raise SystemExit(1)
-    click.echo(f"All {scope} passed - {tail}")
+    # "passed" only when something was actually checked. Skips do not gate, but
+    # summarising an unevaluated run as "all passed" is the same lie the SKIP
+    # severity exists to avoid — it just moves it from the rule to the summary.
+    verdict = "No hard-gate failures" if counts["skip"] else f"All {scope} passed"
+    click.echo(f"{verdict} - {scope}, {tail}" if counts["skip"] else f"{verdict} - {tail}")
 
 
 def _imported_session_ids(events_path: Path) -> set:

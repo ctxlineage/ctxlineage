@@ -216,15 +216,23 @@ function renderCallDetail() {
     return;
   }
   const { c } = calls[selCall];
-  const total = c.segments.reduce((a, g) => a + g.tokens_est, 0) || 1;
+  const segTotal = c.segments.reduce((a, g) => a + g.tokens_est, 0);
   const inTok = c.usage ? c.usage.prompt_tokens : c.input_tokens_est;
+  // An imported transcript cannot recover the system prompt or tool
+  // definitions, but they were in the window and cost these tokens. Proportion
+  // against the whole prompt, not against the fraction we can name — otherwise
+  // a 4-token segment of a 33k prompt renders as "50% of input".
+  const unaccounted = c.segments_complete === false ? Math.max(inTok - segTotal, 0) : 0;
+  const total = segTotal + unaccounted || 1;
   const pct = c.context_window ? (100 * inTok / c.context_window) : null;
   // role (not kind): a tagged system prompt stays in the fn card, with provenance
   const sys = c.segments.filter((g) => g.role === "system");
   const rest = c.segments.filter((g) => g.role !== "system");
 
   const winSegs = c.segments.map((g) =>
-    `<i style="width:${(100 * g.tokens_est / total).toFixed(2)}%;background:${kindColor(g.kind)}"></i>`).join("");
+    `<i style="width:${(100 * g.tokens_est / total).toFixed(2)}%;background:${kindColor(g.kind)}"></i>`).join("")
+    + (unaccounted ? `<i class="unaccounted" style="width:${(100 * unaccounted / total).toFixed(2)}%"
+         title="${fmt(unaccounted)} tok the transcript does not preserve"></i>` : "");
   const windowbar = `
     <div class="windowbar">
       <div class="lbl"><span>context window — input ${fmt(inTok)} tok${c.usage ? "" : " (est.)"}</span>
@@ -232,6 +240,22 @@ function renderCallDetail() {
       <div class="bar">${pct !== null
         ? `<i style="width:${Math.max(pct, 0.6)}%;display:flex;overflow:hidden">${winSegs}</i>` : winSegs}</div>
     </div>`;
+
+  // Imported sessions: say what could not be reconstructed, on the page. The
+  // CLI says it at import time, but the report is what gets reopened and shared.
+  const imp = c["import"];
+  const provenance = imp ? `
+    <div class="provenance">
+      <div class="lbl"><span>imported from ${esc(imp.source || "an agent transcript")}</span>
+        <span>${fmt(unaccounted)} of ${fmt(inTok)} prompt tok not preserved</span></div>
+      <div class="txt">Reconstructed from a session transcript, not captured live. Token counts
+        are the API's own; segment sizes are estimated. Not preserved by the transcript:
+        ${esc((imp.not_preserved || []).join(", ") || "some fields")}${
+          imp.reasoning_blocks_stripped
+            ? ` (${fmt(imp.reasoning_blocks_stripped)} reasoning block(s) kept only as a signature)` : ""
+        }. The ones that were part of the prompt still cost the tokens counted above — only
+        their text is unavailable; the rest is missing metadata that cost nothing.</div>
+    </div>` : "";
 
   const segs = rest.map((g) => {
     const ws = !g.content.trim();
@@ -277,8 +301,14 @@ function renderCallDetail() {
     <div class="callhead"><h2>call ${selCall + 1}</h2>
       <span class="meta">${esc(c.id)} · ${esc(c.timestamp)}</span></div>
     ${windowbar}
+    ${provenance}
     <div class="flow">
       <div class="col"><h4>input — context</h4>${segs}
+        ${unaccounted ? `<div class="seg unaccounted-seg">
+          <div class="top"><span class="kind">not preserved by the transcript</span>
+            <span class="share">${fmt(unaccounted)} tok · ${(100 * unaccounted / total).toFixed(0)}%</span></div>
+          <div class="preview">system prompt, tool definitions and reasoning text — sent, counted, not recorded</div>
+        </div>` : ""}
         ${c.segments.some((g) => g.tagged) ? "" : '<div class="hint">user input may contain app-injected context (RAG, templates) — tag it with the span API to split and attribute it</div>'}</div>
       <div class="arrow">→</div>
       <div class="col"><h4>fn — step + model + instructions</h4>${fn}</div>

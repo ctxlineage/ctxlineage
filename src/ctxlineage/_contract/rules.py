@@ -16,6 +16,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from ctxlineage._contract.runner import FAIL, SKIP, WARN, Finding
+from ctxlineage._report.normalize import _PROMPT_BEARING
 
 # The segment kinds `build_report_data` actually produces, for error messages.
 # Tagged parts additionally carry their tag name as `kind`.
@@ -44,6 +45,7 @@ class WindowBudget:
     def check(self, data: dict) -> list[Finding]:
         findings: list[Finding] = []
         segment_seen = False
+        evaluated_any = False
         for session in data["sessions"]:
             for call in session["calls"]:
                 window = call.get("context_window")
@@ -57,6 +59,23 @@ class WindowBudget:
                         )
                     )
                     continue
+                if self.segment and not call.get("segments_complete", True):
+                    # The producer declared parts of the real prompt missing, so a
+                    # share-of-window over these segments is not the share of
+                    # anything that was sent. Passing here would be the exact
+                    # failure SKIP exists to prevent (#63).
+                    findings.append(
+                        Finding(
+                            self.NAME,
+                            SKIP,
+                            f"{_locate(session, call)}: {self._subject()} not evaluated - this "
+                            f"call's segments do not cover the whole prompt "
+                            f"({self._missing(call)}), so a segment budget would measure a "
+                            f"fraction and call it the whole",
+                        )
+                    )
+                    continue
+                evaluated_any = True
                 used, basis, present = self._used(call)
                 segment_seen = segment_seen or present
                 pct = used / window * 100
@@ -70,7 +89,11 @@ class WindowBudget:
                             f"({used:,} {basis} tokens)",
                         )
                     )
-        if self.segment and not segment_seen:
+        # Only meaningful if some call was actually evaluated: when every call
+        # skipped, the segment's absence is unknown, not established, and
+        # telling the user to check the name sends them after a typo that is
+        # not there.
+        if self.segment and evaluated_any and not segment_seen:
             findings.append(
                 Finding(
                     self.NAME,
@@ -84,6 +107,14 @@ class WindowBudget:
 
     def _subject(self) -> str:
         return f"segment {self.segment!r}" if self.segment else "the prompt"
+
+    def _missing(self, call: dict) -> str:
+        """Name what the producer said it could not recover, for the skip reason."""
+        meta = call.get("import") if isinstance(call.get("import"), dict) else {}
+        missing = [p for p in (meta.get("not_preserved") or ()) if p in _PROMPT_BEARING]
+        source = meta.get("source")
+        origin = f"imported from {source}" if source else "reconstructed"
+        return f"{origin}; not preserved: {', '.join(missing)}" if missing else origin
 
     def _used(self, call: dict) -> tuple[int, str, bool]:
         """(tokens, how-we-know, whether the selector matched anything here)."""

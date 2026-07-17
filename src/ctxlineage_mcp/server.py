@@ -150,7 +150,14 @@ def get_call(call_id: str, full_content: bool = False) -> dict:
     """Get one LLM call's full context anatomy: segments (role/kind, tag,
     source, token estimates), usage, output, timing. Segment and output text
     longer than 700 chars is truncated (content_truncated: true) unless
-    full_content=true."""
+    full_content=true.
+
+    Check `segments_complete`. When it is false the segments are only part of
+    the prompt that was really sent — the call was reconstructed from an agent
+    transcript (see `import`) that does not preserve the system prompt, tool
+    definitions or reasoning text. `usage` is still the API's own count, so
+    segments will not add up to it, and reasoning about "what filled the
+    window" from segments alone would be wrong."""
     data = _store.report_data()
     found = _find_call(data, call_id)
     if not found:
