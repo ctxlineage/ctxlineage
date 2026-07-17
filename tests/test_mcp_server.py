@@ -225,6 +225,18 @@ def test_get_call_unknown_id(events_dir):
         server.get_call("nope")
 
 
+async def test_get_lineage_schema_param_is_node_id():
+    # the parameter name is part of the public MCP tool schema — agent clients
+    # call get_lineage(node_id=...), so this pins it against accidental rename.
+    tool = next(t for t in await server.mcp.list_tools() if t.name == "get_lineage")
+    assert "node_id" in tool.inputSchema["properties"]
+    assert "id" not in tool.inputSchema["properties"]
+
+
+def test_get_lineage_accepts_node_id_keyword(events_dir):
+    assert server.get_lineage(node_id="c1")["node"]["id"] == "c1"
+
+
 def test_get_lineage_by_call_id(events_dir):
     lineage = server.get_lineage("c1")
     assert lineage["node"]["type"] == "call"
@@ -286,6 +298,29 @@ def test_get_lineage_downstream_cap(events_dir, monkeypatch):
     lineage = server.get_lineage("c1")
     assert lineage["downstream_call_ids"] == []
     assert lineage["downstream_truncated"] is True
+
+
+def test_report_data_concurrent_access(events_dir):
+    # FastMCP runs sync tools on a thread pool; the cache is lock-guarded so
+    # concurrent readers all observe a consistent (_data, skipped_lines).
+    import threading
+
+    results, errors = [], []
+
+    def worker():
+        try:
+            data = server.list_sessions()
+            results.append((len(data["sessions"]), data["skipped_lines"]))
+        except Exception as exc:  # pragma: no cover - failure path
+            errors.append(exc)
+
+    threads = [threading.Thread(target=worker) for _ in range(16)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert not errors
+    assert set(results) == {(2, 0)}
 
 
 def test_reflects_appended_events(events_dir):
