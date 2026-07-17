@@ -1,4 +1,6 @@
 import builtins
+import threading
+import time
 
 import httpx
 import pytest
@@ -6,7 +8,7 @@ import respx
 
 import ctxlineage
 from ctxlineage._events import EventWriter
-from ctxlineage._instrument import openai_patch
+from ctxlineage._instrument import anthropic_patch, openai_patch
 
 CHAT_URL = "https://api.openai.com/v1/chat/completions"
 MESSAGES_URL = "https://api.anthropic.com/v1/messages"
@@ -85,6 +87,85 @@ def test_poisoned_assembler_does_not_break_stream_consumer(
         chunks = list(stream)  # exhausting the stream must not raise into the consumer
     assert len(chunks) == 7
     assert capture() == []  # the recording is lost, the host app is not
+
+
+def _run_concurrently(target, n=8):
+    """Line n threads up on a barrier so they all hit `target` together."""
+    barrier = threading.Barrier(n)
+
+    def run():
+        barrier.wait()
+        target()
+
+    threads = [threading.Thread(target=run) for _ in range(n)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+
+def test_concurrent_install_patches_each_provider_once(monkeypatch):
+    """The install lock makes concurrent init() calls patch each provider once."""
+    import ctxlineage._instrument as instrument
+
+    calls = {"openai": 0, "anthropic": 0}
+
+    def make_stub(name):
+        def stub():
+            time.sleep(0.01)  # widen the window a broken check-then-act would lose
+            calls[name] += 1
+            return True
+
+        return stub
+
+    monkeypatch.setattr(openai_patch, "install", make_stub("openai"))
+    monkeypatch.setattr(anthropic_patch, "install", make_stub("anthropic"))
+    monkeypatch.setattr(instrument, "_installed_providers", None)
+
+    results = []
+    _run_concurrently(lambda: results.append(instrument.install()))
+
+    assert calls == {"openai": 1, "anthropic": 1}
+    assert all(r == ["openai", "anthropic"] for r in results)  # every caller sees the same list
+
+
+def test_concurrent_openai_install_wraps_once(monkeypatch):
+    """openai_patch's own _PATCHED lock: the wrap step runs once under a race."""
+    patched = []
+
+    def fake_patch():
+        time.sleep(0.01)  # hold the critical section open to expose a missing lock
+        patched.append(1)
+
+    monkeypatch.setattr(openai_patch, "_PATCHED", False)
+    monkeypatch.setattr(openai_patch, "_patch", fake_patch)
+
+    _run_concurrently(openai_patch.install)
+
+    assert len(patched) == 1
+
+
+def test_concurrent_anthropic_install_wraps_each_method_once(monkeypatch):
+    """anthropic_patch's own _PATCHED lock: each method is wrapped exactly once."""
+    wrapped = []
+
+    class _FakeWrapt:
+        @staticmethod
+        def wrap_function_wrapper(module, name, wrapper):
+            time.sleep(0.005)  # hold the critical section open to expose a missing lock
+            wrapped.append(name)
+
+    monkeypatch.setattr(anthropic_patch, "wrapt", _FakeWrapt)
+    monkeypatch.setattr(anthropic_patch, "_PATCHED", False)
+
+    _run_concurrently(anthropic_patch.install)
+
+    assert sorted(wrapped) == [
+        "AsyncMessages.create",
+        "AsyncMessages.stream",
+        "Messages.create",
+        "Messages.stream",
+    ]
 
 
 def test_stream_manager_without_raw_stream_still_returns_stream():

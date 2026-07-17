@@ -210,6 +210,78 @@ def messages_error_stream_body():
 
 
 @pytest.fixture
+def messages_tool_use_stream_body():
+    """A multi-block stream the assembler only partially understands.
+
+    Exercises the documented scope guard: a thinking block (index 0,
+    thinking_delta), a text block at index >= 1 (index 1, text_delta), and a
+    tool_use block (index 2, input_json_delta). Only text_delta is accumulated;
+    the thinking/tool_use text is intentionally dropped, but chunk_count and the
+    final usage must still be exact and nothing may crash.
+    """
+    return _anthropic_sse(
+        {
+            "type": "message_start",
+            "message": {
+                "id": "msg_test1",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-sonnet-5",
+                "content": [],
+                "stop_reason": None,
+                "stop_sequence": None,
+                "usage": {"input_tokens": 9, "output_tokens": 1},
+            },
+        },
+        {
+            "type": "content_block_start",
+            "index": 0,
+            "content_block": {"type": "thinking", "thinking": "", "signature": ""},
+        },
+        {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {"type": "thinking_delta", "thinking": "let me think"},
+        },
+        {"type": "content_block_stop", "index": 0},
+        {"type": "content_block_start", "index": 1, "content_block": {"type": "text", "text": ""}},
+        {
+            "type": "content_block_delta",
+            "index": 1,
+            "delta": {"type": "text_delta", "text": "Hello"},
+        },
+        {
+            "type": "content_block_delta",
+            "index": 1,
+            "delta": {"type": "text_delta", "text": " world"},
+        },
+        {"type": "content_block_stop", "index": 1},
+        {
+            "type": "content_block_start",
+            "index": 2,
+            "content_block": {
+                "type": "tool_use",
+                "id": "toolu_1",
+                "name": "get_weather",
+                "input": {},
+            },
+        },
+        {
+            "type": "content_block_delta",
+            "index": 2,
+            "delta": {"type": "input_json_delta", "partial_json": '{"city": "Paris"}'},
+        },
+        {"type": "content_block_stop", "index": 2},
+        {
+            "type": "message_delta",
+            "delta": {"stop_reason": "tool_use", "stop_sequence": None},
+            "usage": {"output_tokens": 20},
+        },
+        {"type": "message_stop"},
+    )
+
+
+@pytest.fixture
 def anthropic_client():
     import anthropic
 

@@ -6,6 +6,7 @@ openai patch targets and how to reduce its stream chunks.
 
 from __future__ import annotations
 
+import threading
 import time
 
 import wrapt
@@ -21,16 +22,27 @@ from ctxlineage._instrument._common import (
 )
 
 _PATCHED = False
+# Guards check-then-act on _PATCHED so concurrent installs wrap each method once.
+_install_lock = threading.Lock()
 
 
 def install() -> bool:
     global _PATCHED
     if _PATCHED:
         return True
-    try:
-        import openai  # noqa: F401
-    except ImportError:
-        return False
+    with _install_lock:
+        if _PATCHED:  # another thread won the race
+            return True
+        try:
+            import openai  # noqa: F401
+        except ImportError:
+            return False
+        _patch()
+        _PATCHED = True
+        return True
+
+
+def _patch() -> None:
     wrapt.wrap_function_wrapper(
         "openai.resources.chat.completions",
         "Completions.create",
@@ -52,8 +64,6 @@ def install() -> bool:
         )
     except (ImportError, AttributeError):
         pass
-    _PATCHED = True
-    return True
 
 
 def _assembler_for(api: str):

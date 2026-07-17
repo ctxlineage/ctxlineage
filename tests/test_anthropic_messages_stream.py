@@ -164,3 +164,22 @@ def test_builtin_next_partial_then_close_records(capture, anthropic_client, mess
     stream.close()
     (event,) = capture()
     assert event["payload"]["response"]["content"]["0"] == "Hello"
+
+
+@respx.mock
+def test_multi_block_stream_degrades_but_stays_accurate(
+    capture, anthropic_client, validate_event, messages_tool_use_stream_body
+):
+    _mock_stream(messages_tool_use_stream_body)
+    stream = _create_stream(anthropic_client)
+    seen = [c for c in stream]  # thinking + text + tool_use blocks must not crash
+    assert len(seen) == 13
+    (event,) = capture()
+    validate_event(event)
+    response = event["payload"]["response"]
+    # scope guard: only the text_delta block is accumulated (here at index >= 1);
+    # the thinking and tool_use blocks are intentionally absent from content.
+    assert response["content"] == {"1": "Hello world"}
+    assert response["stop_reason"] == "tool_use"
+    assert response["chunk_count"] == 13  # every raw event still counted
+    assert event["payload"]["usage"] == {"input_tokens": 9, "output_tokens": 20}

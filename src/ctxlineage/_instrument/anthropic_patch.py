@@ -14,6 +14,7 @@ Shared design constraints live in _common.py. Two streaming surfaces exist:
 
 from __future__ import annotations
 
+import threading
 import time
 
 import wrapt
@@ -29,26 +30,31 @@ from ctxlineage._instrument._common import (
 )
 
 _PATCHED = False
+# Guards check-then-act on _PATCHED so concurrent installs wrap each method once.
+_install_lock = threading.Lock()
 
 
 def install() -> bool:
     global _PATCHED
     if _PATCHED:
         return True
-    try:
-        import anthropic  # noqa: F401
-    except ImportError:
-        return False
-    wrapt.wrap_function_wrapper("anthropic.resources.messages", "Messages.create", _sync_create)
-    wrapt.wrap_function_wrapper(
-        "anthropic.resources.messages", "AsyncMessages.create", _async_create
-    )
-    wrapt.wrap_function_wrapper("anthropic.resources.messages", "Messages.stream", _sync_stream)
-    wrapt.wrap_function_wrapper(
-        "anthropic.resources.messages", "AsyncMessages.stream", _async_stream
-    )
-    _PATCHED = True
-    return True
+    with _install_lock:
+        if _PATCHED:  # another thread won the race
+            return True
+        try:
+            import anthropic  # noqa: F401
+        except ImportError:
+            return False
+        wrapt.wrap_function_wrapper("anthropic.resources.messages", "Messages.create", _sync_create)
+        wrapt.wrap_function_wrapper(
+            "anthropic.resources.messages", "AsyncMessages.create", _async_create
+        )
+        wrapt.wrap_function_wrapper("anthropic.resources.messages", "Messages.stream", _sync_stream)
+        wrapt.wrap_function_wrapper(
+            "anthropic.resources.messages", "AsyncMessages.stream", _async_stream
+        )
+        _PATCHED = True
+        return True
 
 
 def _sync_create(wrapped, instance, args, kwargs):
