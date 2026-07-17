@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ctxlineage: a local-first Python library that records every LLM call (OpenAI / Anthropic SDKs, auto-instrumented via monkey-patch) to an append-only `.ctxlineage/events.jsonl`, then renders a **single static HTML report** (Call Anatomy + Lineage Graph views). Zero server, zero DB, no external data transmission — ever.
 
-**Current state: pre-implementation.** No Python/frontend code exists yet. There are no build/test commands yet — add them to this file as they come into existence.
+**Current state: v0.1.0 (first public release).** All of M1–M4 shipped: capture (openai + anthropic, sync/async/streaming), the four-view report, the span/tag lineage pipeline, the MCP server, redaction, and runnable examples. Build/test: `uv sync --all-extras`, `uv run pytest`, `uv run ruff check . && uv run ruff format .`. Next: v0.2 = context contract testing (#14) + coding-agent session import (#57).
 
 ## Required workflow
 

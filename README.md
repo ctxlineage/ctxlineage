@@ -101,12 +101,11 @@ the log entirely with `ctxlineage.init(redact_fields=["request.messages.content"
 
 ## Status
 
-🚧 **Pre-release.** v0.1.0 (PyPI) is imminent — the capture layer (openai +
-anthropic), the four-view report, the span/tag lineage pipeline, the read-only
-MCP server, and runnable examples are all in. Where it's going: context you can
-**test in CI** (v0.2) and importing coding-agent sessions (`claude -p` / Claude
-Code) into the same report. See the
-[issues](https://github.com/ctxlineage/ctxlineage/issues).
+**v0.1.0** — first public release: the capture layer (openai + anthropic), the
+four-view report, the span/tag lineage pipeline, the read-only MCP server, and
+runnable examples are all in. Where it's going: context you can **test in CI**
+(v0.2) and importing coding-agent sessions (`claude -p` / Claude Code) into the
+same report. See the [issues](https://github.com/ctxlineage/ctxlineage/issues).
 
 ## Contributing
 
