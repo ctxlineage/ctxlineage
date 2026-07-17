@@ -49,3 +49,19 @@ jobs:
         with:
           files: coverage.xml
           fail_ci_if_error: true
+
+  # Isolated so the main matrix never pays for the ~90 MB browser download
+  # (#73). One runner, one browser. The tests skip themselves when no browser
+  # is present, so this job is the only place they actually run.
+  browser:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.13"
+      - run: uv sync
+      - name: Install Chromium
+        run: uv run playwright install --with-deps chromium
+      - name: Run browser tests
+        run: uv run pytest tests/browser -v
