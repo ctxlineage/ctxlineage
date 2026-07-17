@@ -127,7 +127,14 @@ def suite(pytester):
             pytester.makefile(".toml", ctxlineage=config)
 
         def _run(*args):
-            return pytester.runpytest_inprocess(*args)
+            # Disable pytest-playwright in the sub-run: it is installed in CI
+            # (a sibling feature's browser tests) and wraps `pytest_runtest_call`
+            # with a process-global "soft assertion scope" that refuses to nest.
+            # Because runpytest_inprocess runs the sub-pytest inside this parent
+            # test — itself already inside playwright's scope — the sub-run's
+            # wrapper would raise "nested soft assertion scopes are not
+            # supported". '-p no:<name>' is a no-op when the plugin is absent.
+            return pytester.runpytest_inprocess("-p", "no:playwright", *args)
 
         return _run
 
