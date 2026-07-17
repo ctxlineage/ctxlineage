@@ -72,6 +72,11 @@ def _part_text(part: dict) -> str:
     if ptype == "tool_result":
         # content is a string or a nested block list (recurse to flatten it)
         return _content_to_text(part.get("content"))
+    if ptype == "thinking":
+        # visible marker, not the (potentially huge) reasoning text itself
+        return f"[thinking: {len(part.get('thinking') or '')} chars not shown]"
+    if ptype == "redacted_thinking":
+        return "[redacted thinking]"
     return part.get("text") or part.get("input_text") or ""
 
 
@@ -143,6 +148,13 @@ def _responses_segments(request: dict) -> list[dict]:
     return segments
 
 
+def _index_key(item):
+    try:
+        return int(item[0])
+    except (TypeError, ValueError):
+        return 0
+
+
 def _chat_output(response) -> dict | None:
     if not isinstance(response, dict):
         return None
@@ -153,13 +165,14 @@ def _chat_output(response) -> dict | None:
         }
     if response.get("object") == "message.assembled":
         # anthropic streamed assembly: content is {index: text} (text_delta can
-        # land at index >= 1), stop_reason is the finish signal.
+        # land at index >= 1), stop_reason is the finish signal. Indices are
+        # stringified ints — sort numerically or block 10 sorts before block 2.
         content = response.get("content")
         text = ""
         if isinstance(content, dict):
-            text = "\n".join(v for _, v in sorted(content.items()) if v)
+            text = "\n".join(v for _, v in sorted(content.items(), key=_index_key) if v)
         return {"content": text, "finish_reason": response.get("stop_reason")}
-    if isinstance(response.get("content"), list):
+    if response.get("type") == "message" and isinstance(response.get("content"), list):
         # anthropic non-stream Messages: top-level content-block list + stop_reason
         return {
             "content": _content_to_text(response["content"]),
@@ -195,6 +208,8 @@ def _canonical_usage(usage):
     prompt_/completion_ vocabulary the report reads; original keys pass through."""
     if not isinstance(usage, dict):
         return usage
+    # a pre-existing prompt_tokens means another producer owns the canonical
+    # vocabulary — trust it (no fold, no recompute) rather than second-guess.
     if "prompt_tokens" in usage or "input_tokens" not in usage:
         return usage
     prompt = usage.get("input_tokens") or 0
@@ -207,7 +222,9 @@ def _canonical_usage(usage):
         **usage,
         "prompt_tokens": prompt,
         "completion_tokens": completion,
-        "total_tokens": usage.get("total_tokens", prompt + completion),
+        # recompute so total stays consistent with the folded prompt (a carried
+        # total from middleware would otherwise be smaller than prompt alone)
+        "total_tokens": prompt + completion,
     }
 
 

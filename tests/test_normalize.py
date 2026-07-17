@@ -809,3 +809,66 @@ def test_anthropic_usage_folds_cache_tokens():
     assert usage["completion_tokens"] == 5
     assert usage["total_tokens"] == 147
     assert usage["cache_read_input_tokens"] == 100  # originals pass through untouched
+
+
+def test_anthropic_usage_fold_overrides_carried_total():
+    # a middleware-carried total_tokens computed pre-fold would be smaller than
+    # the folded prompt alone (>100% window figures) — the fold recomputes it.
+    event = _event(
+        _anthropic_payload(
+            {"messages": [{"role": "user", "content": "hi there my friend"}]},
+            usage={
+                "input_tokens": 12,
+                "output_tokens": 5,
+                "cache_read_input_tokens": 100,
+                "total_tokens": 17,
+            },
+        )
+    )
+    usage = normalize.build_report_data([event])["sessions"][0]["calls"][0]["usage"]
+    assert usage["prompt_tokens"] == 112
+    assert usage["total_tokens"] == 117  # recomputed, not the carried 17
+
+
+def test_anthropic_thinking_blocks_visibly_marked():
+    # thinking blocks carry no `text`; they must leave a visible marker, not
+    # vanish (honest data — the tokens they consume need an explanation).
+    payload = _anthropic_payload(
+        {"messages": [{"role": "user", "content": "hi"}]},
+        response={
+            "id": "msg1",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-sonnet-5",
+            "content": [
+                {"type": "thinking", "thinking": "let me reason about this", "signature": "s"},
+                {"type": "redacted_thinking", "data": "opaque"},
+                {"type": "text", "text": "the final answer"},
+            ],
+            "stop_reason": "end_turn",
+        },
+    )
+    output = normalize.build_report_data([_event(payload)])["sessions"][0]["calls"][0]["output"]
+    assert "the final answer" in output["content"]
+    assert "[thinking: 24 chars not shown]" in output["content"]
+    assert "[redacted thinking]" in output["content"]
+
+
+def test_anthropic_assembled_indices_sort_numerically():
+    # capture stringifies block indices; ten-plus blocks must not join in
+    # lexicographic order ("10" before "2").
+    payload = _anthropic_payload(
+        {"messages": [{"role": "user", "content": "hi"}]},
+        response={
+            "object": "message.assembled",
+            "id": "m",
+            "model": "claude-sonnet-5",
+            "content": {"10": "TENTH", "2": "SECOND"},
+            "stop_reason": "end_turn",
+            "usage": None,
+            "chunk_count": 2,
+        },
+        stream=True,
+    )
+    call = normalize.build_report_data([_event(payload)])["sessions"][0]["calls"][0]
+    assert call["output"]["content"] == "SECOND\nTENTH"
