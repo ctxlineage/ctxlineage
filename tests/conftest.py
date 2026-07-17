@@ -4,6 +4,11 @@ from pathlib import Path
 import pytest
 from jsonschema import Draft202012Validator
 
+# Enables the `pytester` fixture, which runs a sub-pytest in-process so coverage
+# sees the plugin under test (tests/test_pytest_plugin.py). Must live in the
+# top-level conftest.
+pytest_plugins = ["pytester"]
+
 SCHEMA_PATH = Path(__file__).parent.parent / "schema" / "events.v1.schema.json"
 _VALIDATOR = Draft202012Validator(json.loads(SCHEMA_PATH.read_text()))
 
