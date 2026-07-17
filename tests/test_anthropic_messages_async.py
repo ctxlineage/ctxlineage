@@ -106,3 +106,64 @@ async def test_async_stream_helper_records_full_message(
     assert event["payload"]["stream"] is True
     assert event["payload"]["response"]["content"]["0"] == "Hello world"
     assert event["payload"]["usage"] == {"input_tokens": 9, "output_tokens": 2}
+
+
+@respx.mock
+async def test_async_create_stream_records_exactly_once(
+    capture, async_client, messages_stream_body
+):
+    respx.post(MESSAGES_URL).mock(
+        return_value=httpx.Response(200, headers=SSE_HEADERS, content=messages_stream_body)
+    )
+    stream = await async_client.messages.create(
+        model="claude-sonnet-5", max_tokens=64, messages=MESSAGES, stream=True
+    )
+    _ = [c async for c in stream]
+    _ = [c async for c in stream]  # exhausted iterator, no new chunks
+    assert len(capture()) == 1
+
+
+@respx.mock
+async def test_async_stream_helper_abandoned_records_partial(
+    capture, async_client, messages_stream_body
+):
+    respx.post(MESSAGES_URL).mock(
+        return_value=httpx.Response(200, headers=SSE_HEADERS, content=messages_stream_body)
+    )
+    async with async_client.messages.stream(
+        model="claude-sonnet-5", max_tokens=64, messages=MESSAGES
+    ) as stream:
+        async for _text in stream.text_stream:
+            break  # abandon after the first text delta; __aexit__ records the partial
+    (event,) = capture()
+    assert event["payload"]["response"]["content"]["0"] == "Hello"
+
+
+@respx.mock
+async def test_async_stream_helper_never_entered_records_nothing(
+    capture, async_client, messages_stream_body
+):
+    respx.post(MESSAGES_URL).mock(
+        return_value=httpx.Response(200, headers=SSE_HEADERS, content=messages_stream_body)
+    )
+    manager = async_client.messages.stream(
+        model="claude-sonnet-5", max_tokens=64, messages=MESSAGES
+    )
+    del manager  # no __aenter__, no HTTP request, nothing to record
+    assert capture() == []
+
+
+@respx.mock
+async def test_async_stream_helper_final_message_stays_intact(
+    capture, async_client, messages_stream_body
+):
+    respx.post(MESSAGES_URL).mock(
+        return_value=httpx.Response(200, headers=SSE_HEADERS, content=messages_stream_body)
+    )
+    async with async_client.messages.stream(
+        model="claude-sonnet-5", max_tokens=64, messages=MESSAGES
+    ) as stream:
+        message = await stream.get_final_message()
+    assert message.content[0].text == "Hello world"  # proxy must not break the accumulator
+    assert message.usage.output_tokens == 2
+    assert len(capture()) == 1
