@@ -1,3 +1,4 @@
+import asyncio
 import builtins
 import gc
 import threading
@@ -182,6 +183,214 @@ def test_base_payload_snapshots_each_key_independently():
     messages[0]["content"] = "mutated"
     assert payload["request"]["messages"] == [{"role": "user", "content": "hi"}]
     assert payload["request"]["extra"] is module  # fell back to the live reference
+
+
+def test_snapshot_falls_back_when_deepcopy_raises():
+    """A value whose own __deepcopy__ raises is a live-ref fallback, not a lost snapshot.
+
+    Modules fail inside copy's dispatch; an SDK object with a hostile or merely
+    buggy __deepcopy__ fails inside the value's own code. Both must degrade the
+    same way — per key, never taking `messages` down with them.
+    """
+
+    class Hostile:
+        def __deepcopy__(self, memo):
+            raise RuntimeError("this object refuses to be copied")
+
+    messages = [{"role": "user", "content": "hi"}]
+    hostile = Hostile()
+    payload = base_payload("openai", "chat.completions", {"messages": messages, "tools": hostile})
+    messages[0]["content"] = "mutated"
+    assert payload["request"]["messages"] == [{"role": "user", "content": "hi"}]
+    assert payload["request"]["tools"] is hostile
+
+
+def test_snapshot_copies_reference_cycles():
+    """A cycle is copyable (deepcopy memoizes) and must be copied, not aliased."""
+    cyclic = {"name": "original"}
+    cyclic["self"] = cyclic  # a naive recursive copy would blow the stack here
+    payload = base_payload("openai", "chat.completions", {"messages": [], "meta": cyclic})
+    cyclic["name"] = "mutated"
+    snapshot = payload["request"]["meta"]
+    assert snapshot is not cyclic  # really copied, not the fallback
+    assert snapshot["name"] == "original"
+    assert snapshot["self"] is snapshot  # the cycle is preserved in the copy
+
+
+def test_undumpable_chunk_falls_back_to_repr_and_reaches_the_host(capture):
+    """A chunk whose model_dump raises costs the recording detail, never the host.
+
+    Driven through StreamProxy directly: no SDK ships a chunk that behaves this
+    way, but the fallback exists precisely for the one that eventually does.
+    """
+    from ctxlineage._instrument._common import StreamProxy
+
+    class HostileChunk:
+        def model_dump(self, mode=None):
+            raise RuntimeError("this chunk refuses to dump")
+
+        def __repr__(self):
+            return "<HostileChunk>"
+
+    chunk = HostileChunk()
+
+    class FakeStream:
+        def __iter__(self):
+            return iter([chunk])
+
+    def assemble(chunks):
+        return {"object": "test.assembled", "usage": None, "chunk_count": len(chunks)}
+
+    proxy = StreamProxy(FakeStream(), {"provider": "test", "stream": True}, assemble)
+    assert list(proxy) == [chunk]  # the host gets the real object, not the fallback
+    (event,) = capture()
+    assert event["payload"]["response"]["chunk_count"] == 1  # still counted, still recorded
+
+
+# --- #35: the async twins of the abandonment paths above ---
+
+
+def _openai_async_client():
+    import openai
+
+    return openai.AsyncOpenAI(api_key="test-key")
+
+
+async def _await_recording(read_events, timeout=1.0):
+    """Yield to the loop until an event lands (async gen finalization is scheduled)."""
+    deadline = time.monotonic() + timeout
+    while not read_events() and time.monotonic() < deadline:
+        await asyncio.sleep(0)
+    return read_events()
+
+
+@respx.mock
+async def test_anext_then_dropped_async_stream_records_partial_on_gc(capture, chat_stream_body):
+    _mock_openai_stream(chat_stream_body)
+    client = _openai_async_client()
+    stream = await client.chat.completions.create(
+        model="gpt-4o-mini", messages=MESSAGES, stream=True
+    )
+    await stream.__anext__()  # __anext__ directly: no __aiter__ generator to record in a finally
+    del stream
+    gc.collect()
+    (event,) = capture()
+    assert event["payload"]["abandoned"] is True
+    assert event["payload"]["response"]["content"]["0"] == "Hello"  # partial, but kept
+
+
+@respx.mock
+async def test_completed_async_stream_is_not_flagged_and_records_once(capture, chat_stream_body):
+    _mock_openai_stream(chat_stream_body)
+    client = _openai_async_client()
+    stream = await client.chat.completions.create(
+        model="gpt-4o-mini", messages=MESSAGES, stream=True
+    )
+    _ = [c async for c in stream]
+    del stream
+    gc.collect()  # the finalizer must not double-record what the host finished
+    (event,) = capture()
+    assert "abandoned" not in event["payload"]
+    assert event["payload"]["response"]["content"]["0"] == "Hello world"
+
+
+@respx.mock
+async def test_async_for_break_records_partial_once_the_loop_finalizes_it(
+    capture, chat_stream_body
+):
+    """`async for` + break is recorded, but only after the loop runs the aclose.
+
+    The async twin of a sync for/break, and deliberately asymmetric with it: a
+    dropped sync generator is closed synchronously by refcounting, so the
+    `finally` records at once, while a dropped async generator can only be
+    closed by awaiting aclose(), which asyncio schedules as a task. The event is
+    therefore deferred to the next loop ticks, not lost — and it arrives via the
+    normal finish path, so it is *not* flagged abandoned.
+    """
+    _mock_openai_stream(chat_stream_body)
+    client = _openai_async_client()
+    stream = await client.chat.completions.create(
+        model="gpt-4o-mini", messages=MESSAGES, stream=True
+    )
+    async for _chunk in stream:
+        break
+    assert capture() == []  # nothing yet: the aclose task has not run
+    del stream
+    gc.collect()
+    (event,) = await _await_recording(capture)
+    assert "abandoned" not in event["payload"]
+    assert event["payload"]["response"]["content"]["0"] == "Hello"
+    assert event["payload"]["response"]["chunk_count"] == 1
+
+
+@respx.mock
+async def test_async_stream_manager_entered_then_dropped_records_on_gc(
+    capture, messages_stream_body
+):
+    """__aenter__ without a matching __aexit__: only the finalizer can catch it."""
+    import anthropic
+
+    respx.post(MESSAGES_URL).mock(
+        return_value=httpx.Response(200, headers=SSE_HEADERS, content=messages_stream_body)
+    )
+    client = anthropic.AsyncAnthropic(api_key="test-key", max_retries=0)
+    manager = client.messages.stream(model="claude-sonnet-5", max_tokens=64, messages=MESSAGES)
+    stream = await manager.__aenter__()  # the request fires here
+    await stream.__anext__()
+    del stream, manager  # never exited, never closed
+    gc.collect()
+    (event,) = capture()
+    assert event["payload"]["abandoned"] is True
+    assert event["payload"]["response"]["chunk_count"] == 1
+
+
+@respx.mock
+async def test_mid_stream_error_then_dropped_records_error_not_abandoned(
+    capture, messages_error_stream_body
+):
+    """error and abandoned are not both true: the host reached the error, so it consumed."""
+    import anthropic
+
+    respx.post(MESSAGES_URL).mock(
+        return_value=httpx.Response(200, headers=SSE_HEADERS, content=messages_error_stream_body)
+    )
+    client = anthropic.AsyncAnthropic(api_key="test-key", max_retries=0)
+    stream = await client.messages.create(
+        model="claude-sonnet-5", max_tokens=64, messages=MESSAGES, stream=True
+    )
+    with pytest.raises(anthropic.APIStatusError):
+        while True:
+            await stream.__anext__()
+    del stream
+    gc.collect()  # the finalizer must not add `abandoned` on top of a recorded error
+    (event,) = capture()
+    assert event["payload"]["error"]["type"] == "APIStatusError"
+    assert "abandoned" not in event["payload"]
+    assert event["payload"]["response"]["content"]["0"] == "Hello"
+
+
+@respx.mock
+async def test_untouched_error_stream_records_abandoned_without_error(
+    capture, messages_error_stream_body
+):
+    """A stream dropped before its error frame is abandoned, not errored.
+
+    The error is in the body, but the host never read that far, so claiming the
+    call failed would invent a failure the host never saw.
+    """
+    import anthropic
+
+    respx.post(MESSAGES_URL).mock(
+        return_value=httpx.Response(200, headers=SSE_HEADERS, content=messages_error_stream_body)
+    )
+    client = anthropic.AsyncAnthropic(api_key="test-key", max_retries=0)
+    await client.messages.create(
+        model="claude-sonnet-5", max_tokens=64, messages=MESSAGES, stream=True
+    )
+    gc.collect()
+    (event,) = capture()
+    assert event["payload"]["abandoned"] is True
+    assert "error" not in event["payload"]
 
 
 def _run_concurrently(target, n=8):
