@@ -16,6 +16,17 @@ ctxlineage: a local-first Python library that records every LLM call (OpenAI / A
 - TODOs live in GitHub issues (`ctxlineage/ctxlineage`), not in local files. Milestones M1–M4 are issues #1–#4; each milestone must be independently demoable.
 - TDD with pytest; SDK patches are tested against mocked HTTP (respx).
 
+## Maintainer commands (`.claude/commands/`)
+
+Repo-scoped slash commands for the maintainer's own workflow (not end-user
+features), adapted from the drt-hub operations playbook:
+
+- `/ctxlineage-release-check` — version/doc consistency sweep, then the
+  tag → Trusted Publishing flow.
+- `/ctxlineage-review-pr` — PR review keyed on ctxlineage's load-bearing rules
+  (host-app safety, no proxying, honest data, self-contained report, Non-Goals).
+- `/ctxlineage-triage` — open PR/issue triage and release-readiness check.
+
 ## Conventions
 
 - **Everything in the repo is English** (code, comments, docs, issues, commits) even when the conversation with the user is in Japanese.
