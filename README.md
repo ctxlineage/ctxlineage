@@ -119,6 +119,42 @@ skipped or warned — never silently passed.
 `segment` selects on the kinds the pipeline really produces — `system`, `user`,
 `assistant`, `tool`, `tool_defs` — or any tag name.
 
+## Importing coding-agent sessions (`ctxlineage import`)
+
+Claude Code and `claude -p` are separate, non-Python processes, so
+`ctxlineage.init()` can't patch them. But they already write a session
+transcript to disk — so ctxlineage reads that local file. Nothing is proxied,
+injected, or sent anywhere; it is the same local-first bargain as capture.
+
+```bash
+ctxlineage import --from claude-code       # newest session for this directory
+ctxlineage import --from claude-code --session <id>
+ctxlineage import --from claude-code path/to/session.jsonl
+ctxlineage import --from claude-code --dry-run   # show what it would do, write nothing
+ctxlineage report --open                   # renders like any captured session
+```
+
+The transcript becomes ordinary `events.jsonl`, so the four views, `ctxlineage
+test`, and the MCP server all work on it unchanged.
+
+**What a transcript cannot tell you.** This is reconstruction, not capture, and
+the gaps are real — the report is honest about them rather than inventing
+numbers:
+
+| | |
+| --- | --- |
+| Token counts | **The API's own** `usage`, reconstructed from the transcript — not estimated |
+| Segment sizes | **Estimated** (the prompt text is rebuilt from the conversation tree) |
+| System prompt, tool definitions | **Not preserved** — they were sent and cost tokens, but the transcript never records them |
+| Reasoning text | **Not preserved** — kept as a signature with the text stripped |
+| Request params, duration, stream flag | **Not preserved** |
+
+So an imported call's segments account for only part of its real prompt: the
+system prompt and tool definitions alone can be tens of thousands of tokens.
+`ctxlineage import` prints the coverage it achieved, and the unaccounted
+remainder is recorded per call. Live capture via `ctxlineage.init()` remains the
+complete picture; import is the bridge to processes you cannot patch.
+
 ## Principles
 
 - **Local-first, zero-server.** The artifact is one HTML file that opens
@@ -142,9 +178,13 @@ the log entirely with `ctxlineage.init(redact_fields=["request.messages.content"
 
 **v0.1.0** — first public release: the capture layer (openai + anthropic), the
 four-view report, the span/tag lineage pipeline, the read-only MCP server, and
-runnable examples are all in. Where it's going: context you can **test in CI**
-(v0.2) and importing coding-agent sessions (`claude -p` / Claude Code) into the
-same report. See the [issues](https://github.com/ctxlineage/ctxlineage/issues).
+runnable examples are all in.
+
+**Unreleased (v0.2 in progress):** `ctxlineage test` — context you can gate in
+CI — and `ctxlineage import --from claude-code` are both on `main` but **not yet
+released**; `pip install ctxlineage` still gives you v0.1.0. See the
+[CHANGELOG](CHANGELOG.md) and the
+[issues](https://github.com/ctxlineage/ctxlineage/issues).
 
 ## Contributing
 

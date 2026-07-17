@@ -8,6 +8,20 @@ land in minor versions).
 ## [Unreleased]
 
 ### Added
+- **Import coding-agent sessions** (#57): `ctxlineage import --from claude-code`
+  turns a Claude Code / `claude -p` session transcript into ordinary
+  `events.jsonl`, so the four views, `ctxlineage test` and the MCP server all
+  work on it unchanged. Those agents are separate, non-Python processes that
+  `init()` cannot patch, but they already write a transcript to disk — so this
+  reads that local artifact. Nothing is proxied, injected, or transmitted.
+  - Takes the newest session for the current directory, `--session <id>`, or an
+    explicit path; `--dry-run` reports without writing; re-importing a session
+    already in the log is refused rather than silently double-counting it.
+  - **Honest about reconstruction:** token counts are the API's own `usage`,
+    but segment sizes are estimated, and the system prompt, tool definitions and
+    reasoning text are *not preserved* by the transcript at all — they were sent
+    and cost tokens that the file simply does not record. The import reports the
+    coverage it achieved rather than presenting a partial prompt as complete.
 - **Context contract testing, first slice** (#14): `ctxlineage test` reads a
   `ctxlineage.toml` of deterministic assertions over recorded events and exits
   non-zero on a hard-gate failure, so context becomes a CI gate. No LLM judge,
