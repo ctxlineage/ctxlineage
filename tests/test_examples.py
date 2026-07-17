@@ -234,3 +234,42 @@ def test_anthropic_no_key_prints_hint(tmp_path):
     assert proc.returncode == 2
     assert "--mock" in proc.stderr
     assert not (tmp_path / "events.jsonl").exists()
+
+
+# --- the documented CI gate, run exactly as the README tells people to run it ---
+
+
+def test_reference_config_gates_the_rag_exemplar(tmp_path):
+    """`examples/ctxlineage.toml` must hold against a real recorded run.
+
+    This is the whole on-ramp the README sells — record keyless, then gate — so
+    if the rules, the exemplar's tags, or the config drift apart, the docs are
+    lying and this test is how we find out.
+    """
+    proc = _run_example("rag_app.py", tmp_path, "--mock")
+    assert proc.returncode == 0, proc.stderr
+
+    config = EXAMPLES / "ctxlineage.toml"
+    result = CliRunner().invoke(cli_main, ["test", "-d", str(tmp_path), "-c", str(config)])
+    assert result.exit_code == 0, (
+        f"the shipped config must pass the shipped example:\n{result.output}"
+    )
+    assert "3 assertion(s)" in result.output
+    # grounded gates on the tag, so a silent pass here means rag_chunks really
+    # landed in the window — not that the rule was skipped for want of evidence
+    assert "SKIP" not in result.output
+    assert "WARN" not in result.output
+
+
+def test_reference_config_fails_a_run_that_breaks_it(tmp_path):
+    """The gate must be able to fail, or passing means nothing."""
+    proc = _run_example("rag_app.py", tmp_path, "--mock")
+    assert proc.returncode == 0, proc.stderr
+
+    tight = tmp_path / "tight.toml"
+    tight.write_text(
+        (EXAMPLES / "ctxlineage.toml").read_text().replace("max_pct = 80", "max_pct = 0.05")
+    )
+    result = CliRunner().invoke(cli_main, ["test", "-d", str(tmp_path), "-c", str(tight)])
+    assert result.exit_code == 1
+    assert "FAIL" in result.output

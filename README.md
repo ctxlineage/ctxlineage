@@ -119,6 +119,43 @@ skipped or warned — never silently passed.
 `segment` selects on the kinds the pipeline really produces — `system`, `user`,
 `assistant`, `tool`, `tool_defs` — or any tag name.
 
+### Try it in 30 seconds (no API key)
+
+```bash
+python examples/rag_app.py --mock            # records a real run, fully offline
+ctxlineage test -c examples/ctxlineage.toml  # → All 3 assertion(s) over 3 call(s) passed
+```
+
+[`examples/ctxlineage.toml`](examples/ctxlineage.toml) is a commented reference
+config; CI runs exactly the two commands above, so it cannot drift from the code.
+
+### Wiring it into CI
+
+`ctxlineage test` gates a **recorded run**, so CI needs one. It does not have to
+be a live one — assertions read the JSONL, not the network:
+
+```yaml
+# .github/workflows/context.yml
+- run: pip install ctxlineage
+- run: pytest tests/            # your existing suite, with ctxlineage.init() in it
+- run: ctxlineage test          # fails the build on a hard-gate breach
+```
+
+Where the events come from is your choice, and the trade is real:
+
+| | Deterministic? | Cost |
+| --- | --- | --- |
+| Your existing tests, with mocked/replayed responses | yes — **start here** | none |
+| A live run against the real API | no (temperature, model drift) | tokens |
+| `ctxlineage import --from claude-code` | yes (a recorded session) | none |
+
+Prompt *assembly* is usually deterministic even when the model's replies are
+not — which is the point: a mocked run still proves what your code put in the
+window. The examples take this route (`--mock` replays canned responses), and
+so can your test suite. Live runs need a statistical gate (run N times, assert a
+pass rate) rather than a single hard gate — that is not built yet, so keep hard
+gates on recorded runs.
+
 ## Importing coding-agent sessions (`ctxlineage import`)
 
 Claude Code and `claude -p` are separate, non-Python processes, so
