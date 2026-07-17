@@ -16,7 +16,9 @@ import sys
 from pathlib import Path
 
 import pytest
+from click.testing import CliRunner
 
+from ctxlineage._cli import main as cli_main
 from ctxlineage._report import normalize
 
 EXAMPLES = Path(__file__).parent.parent / "examples"
@@ -24,7 +26,15 @@ EXAMPLES = Path(__file__).parent.parent / "examples"
 
 def _run_example(script: str, out_dir: Path, *args: str) -> subprocess.CompletedProcess:
     env = {**os.environ, "CTXLINEAGE_DIR": str(out_dir)}
-    for var in ("OPENAI_API_KEY", "OPENAI_BASE_URL", "OPENAI_ORG_ID", "OPENAI_PROJECT"):
+    for var in (
+        "OPENAI_API_KEY",
+        "OPENAI_BASE_URL",
+        "OPENAI_ORG_ID",
+        "OPENAI_PROJECT",
+        "ANTHROPIC_API_KEY",
+        "ANTHROPIC_AUTH_TOKEN",
+        "ANTHROPIC_BASE_URL",
+    ):
         env.pop(var, None)  # keyless: --mock must be fully offline
     return subprocess.run(
         [sys.executable, str(EXAMPLES / script), *args],
@@ -145,3 +155,82 @@ def test_agent_spans_and_tool_tags(agent_events):
     (session,) = report["sessions"]
     matched = {el["name"] for el in session["elements"] if el["matched"]}
     assert "tool_result" in matched
+
+
+@pytest.fixture(scope="module")
+def anthropic_dir(tmp_path_factory):
+    out_dir = tmp_path_factory.mktemp("anthropic")
+    proc = _run_example("anthropic_app.py", out_dir, "--mock")
+    assert proc.returncode == 0, proc.stderr
+    return out_dir
+
+
+@pytest.fixture(scope="module")
+def anthropic_events(anthropic_dir):
+    return _load_events(anthropic_dir)
+
+
+def test_anthropic_all_events_schema_valid(anthropic_events, validate_event):
+    for event in anthropic_events:
+        validate_event(event)
+
+
+def test_anthropic_tool_round_trip(anthropic_events):
+    calls = [e["payload"] for e in anthropic_events if e["event_type"] == "llm_call"]
+    assert len(calls) == 2
+    assert all(c["provider"] == "anthropic" and c["api"] == "messages" for c in calls)
+
+    first, second = calls
+    assert first["stream"] is False
+    assert first["request"]["system"] == second["request"]["system"]  # top-level kwarg
+    assert first["response"]["stop_reason"] == "tool_use"
+
+    tool_results = [
+        part
+        for message in second["request"]["messages"]
+        if isinstance(message.get("content"), list)
+        for part in message["content"]
+        if isinstance(part, dict) and part.get("type") == "tool_result"
+    ]
+    assert tool_results, "the tool result must be fed back into the second call"
+    assert second["stream"] is True
+    assert second["response"]["stop_reason"] == "end_turn"
+    assert second["usage"]["output_tokens"] > 0
+
+
+def test_anthropic_span_and_tags(anthropic_events):
+    span_names = [e["payload"]["name"] for e in anthropic_events if e["event_type"] == "span_start"]
+    assert span_names == ["deploy_check"]
+
+    tags = {
+        e["payload"]["name"]: e["payload"] for e in anthropic_events if e["event_type"] == "tag"
+    }
+    assert tags["system"]["source"]
+    assert tags["tool_result"]["source"] == "tool:check_service"
+    assert tags["tool_result"]["transform"]
+
+
+def test_anthropic_report_json_segments_and_edges(anthropic_dir):
+    result = CliRunner().invoke(cli_main, ["report", "--dir", str(anthropic_dir), "--json"])
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.output)
+
+    assert data["stats"]["tags"]["match_rate"] > 0
+    (session,) = data["sessions"]
+    unmatched = [el["name"] for el in session["elements"] if not el["matched"]]
+    assert not unmatched, f"exemplar tags must match 100%: {unmatched}"
+
+    kinds = {seg["kind"] for call in session["calls"] for seg in call["segments"]}
+    assert "system" in kinds, "the top-level system kwarg must surface as a segment"
+    assert "tool_result" in kinds, "the tool_result turn must surface as a tagged tool segment"
+    assert "tool_defs" in kinds
+
+    assert all(call["output"]["content"] for call in session["calls"])
+    assert "output_text" in {edge["kind"] for edge in session["edges"]}
+
+
+def test_anthropic_no_key_prints_hint(tmp_path):
+    proc = _run_example("anthropic_app.py", tmp_path)  # no --mock, no ANTHROPIC_API_KEY
+    assert proc.returncode == 2
+    assert "--mock" in proc.stderr
+    assert not (tmp_path / "events.jsonl").exists()

@@ -121,8 +121,10 @@ Constraints:
   prompt-building code to "make tagging easier".
 
 Working exemplars to imitate: `examples/rag_app.py` (RAG, all three tag kinds,
-`source=`/`transform=`) and `examples/agent_app.py` (multi-turn tool loop,
-per-turn spans, `tool_result` tagging).
+`source=`/`transform=`), `examples/agent_app.py` (multi-turn tool loop,
+per-turn spans, `tool_result` tagging), and `examples/anthropic_app.py`
+(anthropic Messages: top-level `system` kwarg, a tool_use/tool_result round
+trip, streamed final call).
 
 ## Step 4 — Run the app and build the report
 
