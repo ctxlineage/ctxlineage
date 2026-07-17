@@ -110,8 +110,11 @@ Provenance conventions:
 
 Constraints:
 
-- Re-tagging the same name in one span overwrites its provenance (last write
-  wins) — in tool loops, either accept that or number the tags (`tool_result_1`).
+- Re-tagging the same name in one span (e.g. `tool_result` per tool call in a
+  loop) aggregates into one element: the report shows the occurrence count
+  (`tool_result ×3`) and every distinct source/transform, so no provenance is
+  lost. Number the tags (`tool_result_1`, ...) only if you want each occurrence
+  as its own separate node.
 - Spans propagate to async tasks but **not to new threads**; when fanning out
   to threads, carry the context with `contextvars.copy_context()`.
 - Tags describe context; they never modify it. Do not restructure the user's

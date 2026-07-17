@@ -461,7 +461,9 @@ def test_same_span_chain_survives_interleaving():
     assert {"from": "a1", "to": "a2", "kind": "same_span"} in edges
 
 
-def test_retagging_updates_element_provenance():
+def test_same_name_tags_aggregate_all_provenance():
+    # #44: two tags with the same name in one span must not collapse
+    # last-write-wins — every occurrence's provenance is preserved.
     events = _span_events("THE CHUNK TEXT", "Context:\nTHE CHUNK TEXT\nQ: hi")
     retag = dict(events[1])
     retag["payload"] = {"name": "rag_chunks", "content": "THE CHUNK TEXT", "source": "qdrant:y"}
@@ -469,7 +471,38 @@ def test_retagging_updates_element_provenance():
     events.insert(2, retag)
     data = normalize.build_report_data(events)
     (element,) = data["sessions"][0]["elements"]
-    assert element["source"] == "qdrant:y"  # last write wins
+    assert element["occurrences"] == 2
+    assert element["sources"] == ["qdrant:x", "qdrant:y"]  # nothing silently dropped
+    assert element["source"] == "qdrant:x"  # singular = first non-null (back-compat)
+
+
+def test_same_name_tags_distinct_sources_and_transforms():
+    # a tool loop tagging each result `tool_result` with a different source
+    events = _span_events("R1 R2", "used R1 R2 in the prompt")
+    events[1]["payload"] = {"name": "tool_result", "content": "R1", "source": "tool:search"}
+    second = dict(events[1])
+    second["payload"] = {
+        "name": "tool_result",
+        "content": "R2",
+        "source": "tool:fetch",
+        "transform": "truncate",
+    }
+    second["timestamp"] = "2026-07-16T09:00:01.500000+00:00"
+    events.insert(2, second)
+    data = normalize.build_report_data(events)
+    (element,) = data["sessions"][0]["elements"]
+    assert element["occurrences"] == 2
+    assert element["sources"] == ["tool:search", "tool:fetch"]
+    assert element["transforms"] == ["truncate"]
+
+
+def test_single_tag_element_shape_unchanged():
+    events = _span_events("THE CHUNK TEXT", "Context:\nTHE CHUNK TEXT\nQ: hi")
+    data = normalize.build_report_data(events)
+    (element,) = data["sessions"][0]["elements"]
+    assert element["occurrences"] == 1
+    assert element["source"] == "qdrant:x"
+    assert element["sources"] == ["qdrant:x"]
 
 
 def test_element_token_aggregation():

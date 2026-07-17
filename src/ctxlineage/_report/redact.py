@@ -15,6 +15,7 @@ MASK = "[redacted]"
 
 _SEGMENT_KEYS = ("content", "source", "transform")
 _META_KEYS = ("source", "transform")
+_META_LIST_KEYS = ("sources", "transforms")  # #44 aggregated per-occurrence provenance
 
 
 def apply(data: dict, patterns: list[str]) -> int:
@@ -38,6 +39,12 @@ def apply(data: dict, patterns: list[str]) -> int:
             if isinstance(item.get(key), str):
                 item[key] = sub(item[key])
 
+    def sub_list_keys(item: dict, keys: tuple[str, ...]) -> None:
+        for key in keys:
+            values = item.get(key)
+            if isinstance(values, list):
+                item[key] = [sub(v) if isinstance(v, str) else v for v in values]
+
     for session in data.get("sessions", []):
         for call in session.get("calls", []):
             for segment in call.get("segments", []):
@@ -50,6 +57,7 @@ def apply(data: dict, patterns: list[str]) -> int:
                 error["message"] = sub(error["message"])
         for element in session.get("elements", []):
             sub_keys(element, _META_KEYS)
+            sub_list_keys(element, _META_LIST_KEYS)
 
     data["redaction"] = {"patterns": len(compiled), "matches": count}
     return count

@@ -492,16 +492,18 @@ function drawEdges() {
 
 let graphFocus = null;
 
+const elemSources = (e) => (e.sources && e.sources.length ? e.sources : (e.source ? [e.source] : []));
+
 function buildGraph(s) {
   const nodes = [], edges = [];
   const elements = s.elements || [];
-  const srcNames = [...new Set(elements.map((e) => e.source).filter(Boolean))];
+  const srcNames = [...new Set(elements.flatMap(elemSources))];
   srcNames.forEach((name) => nodes.push({ id: "src:" + name, type: "source", label: name }));
   elements.forEach((e, i) => {
     const id = "el:" + i;
     nodes.push({ id, type: "element", label: e.name, source: e.source, tok: e.tokens_est || 0,
-                 transform: e.transform, matched: e.matched });
-    if (e.source) edges.push({ from: "src:" + e.source, to: id, kind: "provenance" });
+                 transform: e.transform, matched: e.matched, occ: e.occurrences || 1 });
+    elemSources(e).forEach((src) => edges.push({ from: "src:" + src, to: id, kind: "provenance" }));
     (e.calls || []).forEach((cid) => edges.push({ from: id, to: "call:" + cid, kind: "feeds" }));
   });
   s.calls.forEach((c) => nodes.push({ id: "call:" + c.id, type: "call", label: (stepOf(c) ?? "llm call") + "()",
@@ -636,7 +638,7 @@ function renderGraphView() {
           fill="var(--panel)" stroke="${n.matched ? kindColor(n.label) : "var(--muted)"}"
           stroke-width="1.6" ${n.matched ? "" : 'stroke-dasharray="5 4"'}/>
         <rect x="${COLX.element}" y="${y[n.id]}" width="5" height="${H.element}" rx="2.5" fill="${kindColor(n.label)}"/>
-        <text x="${COLX.element + 14}" y="${y[n.id] + 19}" font-weight="700" style="fill:${kindColor(n.label)}">${esc(n.label)}</text>
+        <text x="${COLX.element + 14}" y="${y[n.id] + 19}" font-weight="700" style="fill:${kindColor(n.label)}">${esc(n.label)}${n.occ > 1 ? ` ×${n.occ}` : ""}</text>
         <text x="${COLX.element + 14}" y="${y[n.id] + 36}" style="fill:var(--muted)" font-size="11">
           ${n.tok ? fmt(n.tok) + " tok · " : ""}${esc(n.transform ? n.transform : n.matched ? "matched" : "unmatched")}</text>
         ${n.tok ? `<rect x="${COLX.element + 14}" y="${y[n.id] + H.element - 7}" width="${Math.max(6, (W.element - 28) * n.tok / maxTok)}" height="3" rx="1.5" fill="${kindColor(n.label)}" opacity=".8"/>` : ""}</g>`;
