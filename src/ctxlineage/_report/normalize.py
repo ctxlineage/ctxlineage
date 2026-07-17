@@ -58,6 +58,28 @@ def context_window_for(model: str | None) -> int | None:
     return best
 
 
+def _part_text(part: dict) -> str:
+    """Text for one content block. anthropic tool_use / tool_result blocks carry
+    no `text` field; surface them honestly instead of dropping them silently."""
+    ptype = part.get("type")
+    if ptype == "tool_use":
+        name = part.get("name", "tool")
+        try:
+            args = json.dumps(part.get("input", {}), ensure_ascii=False)
+        except (TypeError, ValueError):
+            args = str(part.get("input", {}))
+        return f"[tool_use: {name}({args})]"
+    if ptype == "tool_result":
+        # content is a string or a nested block list (recurse to flatten it)
+        return _content_to_text(part.get("content"))
+    if ptype == "thinking":
+        # visible marker, not the (potentially huge) reasoning text itself
+        return f"[thinking: {len(part.get('thinking') or '')} chars not shown]"
+    if ptype == "redacted_thinking":
+        return "[redacted thinking]"
+    return part.get("text") or part.get("input_text") or ""
+
+
 def _content_to_text(content) -> str:
     """Flatten message content (string or content-parts list) to text."""
     if isinstance(content, str):
@@ -68,23 +90,41 @@ def _content_to_text(content) -> str:
             if isinstance(part, str):
                 parts.append(part)
             elif isinstance(part, dict):
-                text = part.get("text") or part.get("input_text") or ""
+                text = _part_text(part)
                 if text:
                     parts.append(text)
         return "\n".join(parts)
     return "" if content is None else str(content)
 
 
+def _block_types(content) -> set:
+    """The set of content-block `type`s in a message (empty for string content)."""
+    if isinstance(content, list):
+        return {p.get("type") for p in content if isinstance(p, dict)}
+    return set()
+
+
 def _chat_segments(request: dict) -> list[dict]:
     segments = []
+    # anthropic carries the system prompt as a top-level kwarg (str or blocks),
+    # not as a message — without this it would be invisible in the report.
+    system = request.get("system")
+    if system:
+        segments.append({"role": "system", "kind": "system", "content": _content_to_text(system)})
     for message in request.get("messages") or []:
         if not isinstance(message, dict):
             continue
         role = message.get("role", "user")
-        text = _content_to_text(message.get("content"))
-        segment = {"role": role, "kind": role, "content": text}
+        content = message.get("content")
+        segment = {"role": role, "kind": role, "content": _content_to_text(content)}
         if role == "tool" and message.get("name"):
             segment["name"] = message["name"]
+        # anthropic feeds tool output back as a user-role message of tool_result
+        # blocks — render it as a tool segment (unless the turn also has real
+        # user text, in which case it stays user input).
+        types = _block_types(content)
+        if role == "user" and "tool_result" in types and "text" not in types:
+            segment["kind"] = "tool"
         segments.append(segment)
     return segments
 
@@ -108,6 +148,13 @@ def _responses_segments(request: dict) -> list[dict]:
     return segments
 
 
+def _index_key(item):
+    try:
+        return int(item[0])
+    except (TypeError, ValueError):
+        return 0
+
+
 def _chat_output(response) -> dict | None:
     if not isinstance(response, dict):
         return None
@@ -115,6 +162,21 @@ def _chat_output(response) -> dict | None:
         return {
             "content": response.get("content", {}).get("0", ""),
             "finish_reason": response.get("finish_reasons", {}).get("0"),
+        }
+    if response.get("object") == "message.assembled":
+        # anthropic streamed assembly: content is {index: text} (text_delta can
+        # land at index >= 1), stop_reason is the finish signal. Indices are
+        # stringified ints — sort numerically or block 10 sorts before block 2.
+        content = response.get("content")
+        text = ""
+        if isinstance(content, dict):
+            text = "\n".join(v for _, v in sorted(content.items(), key=_index_key) if v)
+        return {"content": text, "finish_reason": response.get("stop_reason")}
+    if response.get("type") == "message" and isinstance(response.get("content"), list):
+        # anthropic non-stream Messages: top-level content-block list + stop_reason
+        return {
+            "content": _content_to_text(response["content"]),
+            "finish_reason": response.get("stop_reason"),
         }
     choices = response.get("choices") or []
     if not choices:
@@ -146,15 +208,23 @@ def _canonical_usage(usage):
     prompt_/completion_ vocabulary the report reads; original keys pass through."""
     if not isinstance(usage, dict):
         return usage
+    # a pre-existing prompt_tokens means another producer owns the canonical
+    # vocabulary — trust it (no fold, no recompute) rather than second-guess.
     if "prompt_tokens" in usage or "input_tokens" not in usage:
         return usage
     prompt = usage.get("input_tokens") or 0
+    # anthropic reports cached prompt tokens separately from input_tokens; fold
+    # them back so prompt/window figures reflect the real context size.
+    prompt += usage.get("cache_read_input_tokens") or 0
+    prompt += usage.get("cache_creation_input_tokens") or 0
     completion = usage.get("output_tokens") or 0
     return {
         **usage,
         "prompt_tokens": prompt,
         "completion_tokens": completion,
-        "total_tokens": usage.get("total_tokens", prompt + completion),
+        # recompute so total stays consistent with the folded prompt (a carried
+        # total from middleware would otherwise be smaller than prompt alone)
+        "total_tokens": prompt + completion,
     }
 
 

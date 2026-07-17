@@ -567,3 +567,308 @@ def test_both_usage_vocabularies_present_no_double_count():
     }
     usage = normalize.build_report_data([event])["sessions"][0]["calls"][0]["usage"]
     assert usage == event["payload"]["usage"]  # openai vocabulary wins, nothing recomputed
+
+
+# --- anthropic Messages payloads (#30) -------------------------------------
+
+
+def _anthropic_payload(request, response=None, usage=None, **extra):
+    payload = {
+        "provider": "anthropic",
+        "api": "messages",
+        "request": {"model": "claude-sonnet-5", **request},
+        "stream": False,
+        "duration_ms": 10.0,
+        "call_stack": [],
+    }
+    if response is not None:
+        payload["response"] = response
+    if usage is not None:
+        payload["usage"] = usage
+    payload.update(extra)
+    return payload
+
+
+def test_anthropic_system_kwarg_becomes_segment():
+    payload = _anthropic_payload(
+        {"system": "You are Claude.", "messages": [{"role": "user", "content": "Hi"}]}
+    )
+    segs = normalize.build_report_data([_event(payload)])["sessions"][0]["calls"][0]["segments"]
+    assert [s["kind"] for s in segs] == ["system", "user"]
+    assert segs[0]["content"] == "You are Claude."
+
+
+def test_anthropic_system_kwarg_as_content_blocks():
+    payload = _anthropic_payload(
+        {
+            "system": [{"type": "text", "text": "Block system."}],
+            "messages": [{"role": "user", "content": "Hi"}],
+        }
+    )
+    segs = normalize.build_report_data([_event(payload)])["sessions"][0]["calls"][0]["segments"]
+    assert segs[0]["kind"] == "system"
+    assert "Block system." in segs[0]["content"]
+
+
+def test_anthropic_tool_use_block_surfaced_not_dropped():
+    # honest data: an assistant tool_use block carries no `text`; it must not
+    # vanish from the recorded turn.
+    payload = _anthropic_payload(
+        {
+            "messages": [
+                {
+                    "role": "assistant",
+                    "content": [
+                        {"type": "text", "text": "Let me check."},
+                        {
+                            "type": "tool_use",
+                            "id": "tu1",
+                            "name": "get_weather",
+                            "input": {"city": "Paris"},
+                        },
+                    ],
+                }
+            ]
+        }
+    )
+    (seg,) = normalize.build_report_data([_event(payload)])["sessions"][0]["calls"][0]["segments"]
+    assert seg["kind"] == "assistant"
+    assert "Let me check." in seg["content"]
+    assert "get_weather" in seg["content"] and "Paris" in seg["content"]
+
+
+def test_anthropic_tool_result_block_surfaced_as_tool_segment():
+    # anthropic feeds tool output back as a user-role message of tool_result
+    # blocks — surface it as a tool segment, not as user input.
+    payload = _anthropic_payload(
+        {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "tool_result", "tool_use_id": "tu1", "content": "Sunny, 21C"}
+                    ],
+                }
+            ]
+        }
+    )
+    (seg,) = normalize.build_report_data([_event(payload)])["sessions"][0]["calls"][0]["segments"]
+    assert seg["kind"] == "tool"
+    assert "Sunny, 21C" in seg["content"]
+
+
+def test_anthropic_tool_result_nested_content_blocks():
+    payload = _anthropic_payload(
+        {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "tu1",
+                            "content": [{"type": "text", "text": "Nested result."}],
+                        }
+                    ],
+                }
+            ]
+        }
+    )
+    (seg,) = normalize.build_report_data([_event(payload)])["sessions"][0]["calls"][0]["segments"]
+    assert "Nested result." in seg["content"]
+
+
+def test_anthropic_user_text_with_tool_result_stays_user():
+    # a message that also carries real user text is not reduced to a tool segment
+    payload = _anthropic_payload(
+        {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "and also"},
+                        {"type": "tool_result", "tool_use_id": "tu1", "content": "R"},
+                    ],
+                }
+            ]
+        }
+    )
+    (seg,) = normalize.build_report_data([_event(payload)])["sessions"][0]["calls"][0]["segments"]
+    assert seg["kind"] == "user"
+    assert "and also" in seg["content"] and "R" in seg["content"]
+
+
+def test_anthropic_nonstream_output_content_blocks():
+    payload = _anthropic_payload(
+        {"messages": [{"role": "user", "content": "hi"}]},
+        response={
+            "id": "msg1",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-sonnet-5",
+            "content": [{"type": "text", "text": "The answer is 42."}],
+            "stop_reason": "end_turn",
+            "usage": {"input_tokens": 9, "output_tokens": 5},
+        },
+        usage={"input_tokens": 9, "output_tokens": 5},
+    )
+    call = normalize.build_report_data([_event(payload)])["sessions"][0]["calls"][0]
+    assert call["output"] == {"content": "The answer is 42.", "finish_reason": "end_turn"}
+
+
+def test_anthropic_assembled_stream_output():
+    payload = _anthropic_payload(
+        {"messages": [{"role": "user", "content": "hi"}]},
+        response={
+            "object": "message.assembled",
+            "id": "msg1",
+            "model": "claude-sonnet-5",
+            "content": {"0": "Streamed claude answer"},
+            "stop_reason": "end_turn",
+            "usage": {"input_tokens": 9, "output_tokens": 3},
+            "chunk_count": 4,
+        },
+        usage={"input_tokens": 9, "output_tokens": 3},
+        stream=True,
+    )
+    call = normalize.build_report_data([_event(payload)])["sessions"][0]["calls"][0]
+    assert call["stream"] is True
+    assert call["output"] == {"content": "Streamed claude answer", "finish_reason": "end_turn"}
+
+
+def test_anthropic_assembled_joins_multiple_text_indices():
+    # text_delta can land at index >= 1 (a thinking block occupies index 0);
+    # every text index must survive, in index order.
+    payload = _anthropic_payload(
+        {"messages": [{"role": "user", "content": "hi"}]},
+        response={
+            "object": "message.assembled",
+            "id": "m",
+            "model": "claude-sonnet-5",
+            "content": {"1": "second part", "0": "first part"},
+            "stop_reason": "end_turn",
+            "usage": None,
+            "chunk_count": 2,
+        },
+        stream=True,
+    )
+    call = normalize.build_report_data([_event(payload)])["sessions"][0]["calls"][0]
+    assert call["output"]["content"] == "first part\nsecond part"
+
+
+def test_anthropic_output_text_edge_inferred():
+    answer = "The webhook secret rotates every 90 days precisely."
+    e1 = _event(
+        _anthropic_payload(
+            {"messages": [{"role": "user", "content": "How often does it rotate?"}]},
+            response={
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-sonnet-5",
+                "content": [{"type": "text", "text": answer}],
+                "stop_reason": "end_turn",
+            },
+        ),
+        call="c1",
+        ts="2026-07-16T09:00:00+00:00",
+    )
+    e2 = _event(
+        _anthropic_payload(
+            {"messages": [{"role": "user", "content": "Earlier you said: " + answer + " Why?"}]},
+            response={
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-sonnet-5",
+                "content": [{"type": "text", "text": "Because of policy."}],
+                "stop_reason": "end_turn",
+            },
+        ),
+        call="c2",
+        ts="2026-07-16T09:01:00+00:00",
+    )
+    edges = normalize.build_report_data([e1, e2])["sessions"][0]["edges"]
+    assert {"from": "c1", "to": "c2", "kind": "output_text"} in edges
+
+
+def test_anthropic_usage_folds_cache_tokens():
+    # anthropic bills cached prompt tokens separately from input_tokens; the
+    # report's prompt/window figures must reflect the real context size.
+    event = _event(
+        _anthropic_payload(
+            {"messages": [{"role": "user", "content": "hi there my friend"}]},
+            usage={
+                "input_tokens": 12,
+                "output_tokens": 5,
+                "cache_read_input_tokens": 100,
+                "cache_creation_input_tokens": 30,
+            },
+        )
+    )
+    usage = normalize.build_report_data([event])["sessions"][0]["calls"][0]["usage"]
+    assert usage["prompt_tokens"] == 142  # 12 + 100 + 30
+    assert usage["completion_tokens"] == 5
+    assert usage["total_tokens"] == 147
+    assert usage["cache_read_input_tokens"] == 100  # originals pass through untouched
+
+
+def test_anthropic_usage_fold_overrides_carried_total():
+    # a middleware-carried total_tokens computed pre-fold would be smaller than
+    # the folded prompt alone (>100% window figures) — the fold recomputes it.
+    event = _event(
+        _anthropic_payload(
+            {"messages": [{"role": "user", "content": "hi there my friend"}]},
+            usage={
+                "input_tokens": 12,
+                "output_tokens": 5,
+                "cache_read_input_tokens": 100,
+                "total_tokens": 17,
+            },
+        )
+    )
+    usage = normalize.build_report_data([event])["sessions"][0]["calls"][0]["usage"]
+    assert usage["prompt_tokens"] == 112
+    assert usage["total_tokens"] == 117  # recomputed, not the carried 17
+
+
+def test_anthropic_thinking_blocks_visibly_marked():
+    # thinking blocks carry no `text`; they must leave a visible marker, not
+    # vanish (honest data — the tokens they consume need an explanation).
+    payload = _anthropic_payload(
+        {"messages": [{"role": "user", "content": "hi"}]},
+        response={
+            "id": "msg1",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-sonnet-5",
+            "content": [
+                {"type": "thinking", "thinking": "let me reason about this", "signature": "s"},
+                {"type": "redacted_thinking", "data": "opaque"},
+                {"type": "text", "text": "the final answer"},
+            ],
+            "stop_reason": "end_turn",
+        },
+    )
+    output = normalize.build_report_data([_event(payload)])["sessions"][0]["calls"][0]["output"]
+    assert "the final answer" in output["content"]
+    assert "[thinking: 24 chars not shown]" in output["content"]
+    assert "[redacted thinking]" in output["content"]
+
+
+def test_anthropic_assembled_indices_sort_numerically():
+    # capture stringifies block indices; ten-plus blocks must not join in
+    # lexicographic order ("10" before "2").
+    payload = _anthropic_payload(
+        {"messages": [{"role": "user", "content": "hi"}]},
+        response={
+            "object": "message.assembled",
+            "id": "m",
+            "model": "claude-sonnet-5",
+            "content": {"10": "TENTH", "2": "SECOND"},
+            "stop_reason": "end_turn",
+            "usage": None,
+            "chunk_count": 2,
+        },
+        stream=True,
+    )
+    call = normalize.build_report_data([_event(payload)])["sessions"][0]["calls"][0]
+    assert call["output"]["content"] == "SECOND\nTENTH"
