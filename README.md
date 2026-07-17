@@ -254,14 +254,16 @@ the log entirely with `ctxlineage.init(redact_fields=["request.messages.content"
 
 ## Status
 
-**v0.1.0** — first public release: the capture layer (openai + anthropic), the
-four-view report, the span/tag lineage pipeline, the read-only MCP server, and
-runnable examples are all in.
+**v0.2.0** — the capture layer (openai + anthropic), the four-view report, the
+span/tag lineage pipeline, the read-only MCP server, and runnable examples, plus:
 
-**Unreleased (v0.2 in progress):** `ctxlineage test` — context you can gate in
-CI — and `ctxlineage import --from claude-code` are both on `main` but **not yet
-released**; `pip install ctxlineage` still gives you v0.1.0. See the
-[CHANGELOG](CHANGELOG.md) and the
+- **`ctxlineage test`** — deterministic context contracts (`window_budget`,
+  `grounded`) that gate a recorded run in CI, and a **pytest plugin**
+  (`pytest --ctxlineage`) that attributes a breach to the test that caused it.
+- **`ctxlineage import --from claude-code`** — bring a Claude Code / `claude -p`
+  session into the same report, honest about what a transcript cannot preserve.
+
+See the [CHANGELOG](CHANGELOG.md) and the
 [issues](https://github.com/ctxlineage/ctxlineage/issues).
 
 ## Contributing
