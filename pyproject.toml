@@ -14,7 +14,16 @@ classifiers = [
   "Topic :: Software Development :: Libraries :: Python Modules",
   "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
-dependencies = ["wrapt>=1.16", "click>=8.1", "tiktoken>=0.8"]
+# tomli only where it is not already stdlib: `ctxlineage test` reads
+# ctxlineage.toml, and tomllib landed in 3.11 while we still support 3.10.
+# The marker means 3.11+ installs nothing extra and the dep disappears when
+# 3.10 is dropped.
+dependencies = [
+  "wrapt>=1.16",
+  "click>=8.1",
+  "tiktoken>=0.8",
+  "tomli>=2; python_version<'3.11'",
+]
 
 [project.urls]
 Homepage = "https://github.com/ctxlineage/ctxlineage"

@@ -7,6 +7,28 @@ land in minor versions).
 
 ## [Unreleased]
 
+### Added
+- **Context contract testing, first slice** (#14): `ctxlineage test` reads a
+  `ctxlineage.toml` of deterministic assertions over recorded events and exits
+  non-zero on a hard-gate failure, so context becomes a CI gate. No LLM judge,
+  no eval dataset — the rules only read what the report pipeline already
+  produces.
+  - `window_budget` — assert a call, or one segment kind within it, stays under
+    a share of the model's context window. Needs no tagging, so it gates any
+    captured run; catches silent context bloat.
+  - `grounded` — assert tagged context actually landed in the window
+    (`presence`), and optionally flag context no downstream call consumed
+    (`warn_dead`).
+  - **Tier rule:** a rule gates only where its evidence is exact. `grounded`
+    hard-gates tagged content, degrades to a warning on inferred lineage, and
+    dead-context is always advisory. Unevaluated assertions are reported as
+    skipped/warned, never as a pass.
+
+### Changed
+- `tomli` is now a runtime dependency on Python 3.10 only (`python_version <
+  "3.11"`), to read `ctxlineage.toml`; 3.11+ uses stdlib `tomllib` and installs
+  nothing new.
+
 ## [0.1.0] - 2026-07-17
 
 First public release.

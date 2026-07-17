@@ -505,6 +505,7 @@ source = { editable = "." }
 dependencies = [
     { name = "click" },
     { name = "tiktoken" },
+    { name = "tomli", marker = "python_full_version < '3.11'" },
     { name = "wrapt" },
 ]
 
@@ -532,6 +533,7 @@ requires-dist = [
     { name = "click", specifier = ">=8.1" },
     { name = "mcp", marker = "extra == 'mcp'", specifier = ">=1.2" },
     { name = "tiktoken", specifier = ">=0.8" },
+    { name = "tomli", marker = "python_full_version < '3.11'", specifier = ">=2" },
     { name = "wrapt", specifier = ">=1.16" },
 ]
 provides-extras = ["mcp"]

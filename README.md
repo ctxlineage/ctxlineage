@@ -80,6 +80,45 @@ with ctxlineage.span("answer_user_query") as span:
 Tagged content is matched back into the actual prompts (exact → partial →
 honestly-untagged, with the match rate displayed — never fabricated).
 
+## Testing context in CI (`ctxlineage test`)
+
+The same recorded artifact is a substrate for **deterministic assertions** — no
+LLM judge, no eval dataset. Write a `ctxlineage.toml`:
+
+```toml
+[[assert.window_budget]]
+max_pct = 80                 # no call may exceed 80% of the model's window
+
+[[assert.window_budget]]
+segment = "tool_defs"        # a segment kind, or a tag name
+max_pct = 20                 # tool definitions may not eat >20% of the window
+
+[[assert.grounded]]
+tag = "rag_chunks"           # every rag_chunks tag must land in the window
+warn_dead = true             # advisory: flag chunks nothing downstream consumed
+```
+
+```bash
+ctxlineage test              # exits non-zero on a hard-gate failure → CI gate
+```
+
+**A rule only gates where its evidence is exact**, which decides what can fail
+your build:
+
+| | Gates on | Because |
+| --- | --- | --- |
+| `window_budget` | any call, **no tagging needed** | token counts and the model window are deterministic from capture alone |
+| `grounded` presence | tagged content only | the `tag()` is your declaration, so "it never reached the window" is exact |
+| `grounded` dead-context | nothing — **advisory** | "nothing downstream used it" is read off *inferred* lineage edges |
+
+Gating on inference is how you get a flaky gate, so ctxlineage won't do it: an
+untagged run warns instead of failing, and anything that couldn't be evaluated
+(an unknown model window, a segment name that never appeared) is reported as
+skipped or warned — never silently passed.
+
+`segment` selects on the kinds the pipeline really produces — `system`, `user`,
+`assistant`, `tool`, `tool_defs` — or any tag name.
+
 ## Principles
 
 - **Local-first, zero-server.** The artifact is one HTML file that opens
