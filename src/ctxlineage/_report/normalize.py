@@ -265,6 +265,38 @@ def _element_tokens(calls: list[dict], sid: str, name: str) -> int:
     )
 
 
+def _distinct(values) -> list:
+    """Non-null values, de-duplicated, in first-seen order."""
+    seen: list = []
+    for value in values:
+        if value and value not in seen:
+            seen.append(value)
+    return seen
+
+
+def _build_element(sid, name, payloads, span_names, matched_tags, calls, consumers) -> dict:
+    """One report element per (span, tag name), aggregating every occurrence so
+    no provenance is silently dropped when a name is tagged more than once (#44).
+    `source`/`transform` stay singular (first non-null) for back-compat; the
+    full de-duplicated lists live in `sources`/`transforms` and the count in
+    `occurrences`."""
+    sources = _distinct(p.get("source") for p in payloads)
+    transforms = _distinct(p.get("transform") for p in payloads)
+    return {
+        "name": name,
+        "span_id": sid,
+        "span_name": span_names.get(sid),
+        "source": sources[0] if sources else None,
+        "transform": transforms[0] if transforms else None,
+        "sources": sources,
+        "transforms": transforms,
+        "occurrences": len(payloads),
+        "matched": (sid, name) in matched_tags,
+        "tokens_est": _element_tokens(calls, sid, name),
+        "calls": consumers.get((sid, name), []),
+    }
+
+
 def build_report_data(events: list[dict]) -> dict:
     span_names: dict = {}
     span_tags: dict = {}
@@ -277,11 +309,14 @@ def build_report_data(events: list[dict]) -> dict:
             span_names[span_id] = payload.get("name")
         elif kind == "tag" and span_id:
             span_tags.setdefault(span_id, []).append(payload)
-            # last write wins: re-tagging the same name updates provenance
-            tag_meta[(span_id, payload.get("name"))] = {
-                "session": event.get("session_id", "unknown"),
-                "payload": payload,
-            }
+            # accumulate every occurrence: same-name tags in one span (e.g. a
+            # per-tool-call `tool_result` in an agent loop) keep all their
+            # provenance instead of collapsing last-write-wins (#44)
+            entry = tag_meta.setdefault(
+                (span_id, payload.get("name")),
+                {"session": event.get("session_id", "unknown"), "payloads": []},
+            )
+            entry["payloads"].append(payload)
 
     sessions: dict[str, list[dict]] = {}
     errors = 0
@@ -306,16 +341,7 @@ def build_report_data(events: list[dict]) -> dict:
         edges, truncated = _session_edges(calls)
 
         elements = [
-            {
-                "name": name,
-                "span_id": sid,
-                "span_name": span_names.get(sid),
-                "source": meta["payload"].get("source"),
-                "transform": meta["payload"].get("transform"),
-                "matched": (sid, name) in matched_tags,
-                "tokens_est": _element_tokens(calls, sid, name),
-                "calls": consumers.get((sid, name), []),
-            }
+            _build_element(sid, name, meta["payloads"], span_names, matched_tags, calls, consumers)
             for (sid, name), meta in tag_meta.items()
             if meta["session"] == session_id
         ]

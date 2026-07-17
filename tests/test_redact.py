@@ -124,6 +124,26 @@ def test_apply_masks_all_text_carriers():
     assert element["transform"] == "filter([redacted])"
 
 
+def test_apply_masks_aggregated_element_provenance():
+    # #44 added elements[].sources / .transforms lists; the redactor must walk
+    # them too or a secret survives in the aggregated provenance.
+    events = _events()
+    second = dict(events[1])
+    second["payload"] = {
+        "name": "rag_chunks",
+        "content": f"SECOND CHUNK {SECRET}",
+        "source": f"pinecone:{SECRET}",
+    }
+    second["timestamp"] = "2026-07-16T09:00:01.500000+00:00"
+    events.insert(2, second)
+    data = normalize.build_report_data(events)
+    redact.apply(data, [re.escape(SECRET)])
+    assert SECRET not in json.dumps(data)
+    element = data["sessions"][0]["elements"][0]
+    assert element["occurrences"] == 2
+    assert all(SECRET not in s for s in element["sources"])
+
+
 def test_apply_keeps_stats_and_structure_honest():
     before = _data()
     after = _data()
