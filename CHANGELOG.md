@@ -43,6 +43,38 @@ land in minor versions).
   "3.11"`), to read `ctxlineage.toml`; 3.11+ uses stdlib `tomllib` and installs
   nothing new.
 
+### Fixed
+- **Streams the host abandons are no longer lost** (#34): a `create(stream=True)`
+  whose return value was never iterated, closed, or exited had no emit path, so
+  a call whose request really did reach the provider left no trace at all. It is
+  now recorded when the object is collected, flagged `abandoned: true` — meaning
+  "recorded from the finalizer; the host never finished, closed or exited this
+  stream". This also covers a `next()`-then-drop, which never reached the
+  iterator's cleanup either.
+- **The recorded request no longer follows the host's later edits** (#34): the
+  request was shallow-copied, so an app mutating its own `messages` list before
+  a stream finished rewrote the record of what had already been sent. It is now
+  snapshotted per key, falling back to the live reference for anything that
+  cannot be copied.
+- **A segment budget no longer passes over a prompt it cannot see** (#63):
+  `window_budget` with `segment=` scored only the reconstructed part of an
+  imported call — a few tokens of a 33k prompt — and reported a confident green.
+  Where a call's segments do not cover the whole prompt, it now skips and says
+  what is missing. The whole-prompt form reads the provider's own `usage`, so it
+  keeps gating imports exactly as before.
+- **Imported calls disclose what the transcript could not preserve** (#64): the
+  call anatomy proportioned segments against their own sum, so a handful of
+  reconstructed tokens filled the whole bar and a 4-token segment read as "50%
+  of input" — the breakdown appeared to account for a prompt it had mostly never
+  seen. It now proportions against the real prompt, renders the unaccounted
+  remainder explicitly, and names the source and the missing fields. The MCP
+  server tells agents to check `segments_complete` for the same reason.
+- A `ctxlineage test` run whose findings are all skips no longer summarises as
+  "All N assertions passed" — skips do not gate, but calling an unevaluated run
+  "passed" is the same thing the skip severity exists to prevent. It also no
+  longer claims a segment "never appeared" when every call was skipped and its
+  absence was never established.
+
 ## [0.1.0] - 2026-07-17
 
 First public release.
