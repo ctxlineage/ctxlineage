@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ctxlineage: a local-first Python library that records every LLM call (OpenAI / Anthropic SDKs, auto-instrumented via monkey-patch) to an append-only `.ctxlineage/events.jsonl`, then renders a **single static HTML report** (Call Anatomy + Lineage Graph views). Zero server, zero DB, no external data transmission — ever.
 
-**Current state: v0.1.0 (first public release).** All of M1–M4 shipped: capture (openai + anthropic, sync/async/streaming), the four-view report, the span/tag lineage pipeline, the MCP server, redaction, and runnable examples. Build/test: `uv sync --all-extras`, `uv run pytest`, `uv run ruff check . && uv run ruff format .`. Next: v0.2 = context contract testing (#14) + coding-agent session import (#57).
+**Current state: v0.1.0 released; v0.2 work merged on `main` but NOT yet released** (`pip install ctxlineage` still gives 0.1.0). M1–M4 shipped: capture (openai + anthropic, sync/async/streaming), the four-view report, the span/tag lineage pipeline, the MCP server, redaction, and runnable examples. On top of that, unreleased: `ctxlineage test` — deterministic context contracts, `_contract/` (#14, first slice only) — and `ctxlineage import --from claude-code`, `_import/` (#57). Build/test: `uv sync --all-extras`, `uv run pytest`, `uv run ruff check . && uv run ruff format .`.
 
 ## Required workflow
 
@@ -41,6 +41,11 @@ Three loosely-coupled layers sharing one artifact, the JSONL event log:
 1. **Capture** — `ctxlineage.init()` monkey-patches openai/anthropic SDKs (wrapt); optional explicit `span()`/`tag()` API adds metadata. Writes 1 event per line to `.ctxlineage/events.jsonl`. Streaming support is mandatory.
 2. **Report builder** — `ctxlineage report` CLI parses the JSONL, normalizes sessions/calls/elements/edges, runs segment matching (exact → partial → "untagged" fallback, match rate shown honestly) and lineage edge inference, then injects JSON into a prebuilt HTML template.
 3. **MCP server** (`src/ctxlineage_mcp/`, FastMCP/stdio) — read-only tools over the same JSONL.
+
+Two consumers sit on top of the report builder, both reading `build_report_data`'s output rather than re-deriving anything:
+
+4. **Contract runner** (`src/ctxlineage/_contract/`) — `ctxlineage test` evaluates a `ctxlineage.toml` of deterministic assertions and exits non-zero on a hard-gate breach. **Tier rule (load-bearing):** a rule may hard-gate only where its evidence is exact; inferred evidence warns, and anything unevaluated is reported as skipped — never as a pass. Not a framework: a handful of built-in relations, no LLM-judge scoring (a Non-Goal).
+5. **Importers** (`src/ctxlineage/_import/`) — `ctxlineage import --from claude-code` normalizes an agent's own on-disk transcript into the same event schema, so the report/test/MCP layers work on it unchanged. Reconstruction, not capture: the transcript cannot preserve the system prompt, tool definitions, or reasoning text, so imported calls carry `import` metadata and `segments_complete: false`, and consumers must not present partial segments as the whole prompt.
 
 The event schema (`schema/`, versioned JSON Schema) is language-agnostic by design — it is the contract between all layers and future non-Python SDKs.
 

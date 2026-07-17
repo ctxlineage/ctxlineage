@@ -1,0 +1,28 @@
+# Reference `ctxlineage.toml` — the contracts asserted over examples/rag_app.py.
+#
+# Run it:
+#     python examples/rag_app.py --mock          # keyless: records a real run offline
+#     ctxlineage test -c examples/ctxlineage.toml
+#
+# CI runs exactly this (tests/test_examples.py), so it cannot drift from the code.
+# Copy it next to your own app and adjust the numbers.
+
+# --- window_budget: needs no tagging, so it gates any recorded run -------------
+
+[[assert.window_budget]]
+max_pct = 80          # no single call may spend >80% of the model's context window
+
+[[assert.window_budget]]
+segment = "history"   # a segment kind (system/user/assistant/tool/tool_defs) or a tag name
+max_pct = 40          # conversation history may not crowd out the retrieved context
+
+# --- grounded: needs tags, and gates only because of them ---------------------
+
+[[assert.grounded]]
+tag = "rag_chunks"    # what you retrieved must actually land in the window.
+                      # Hard gate: the tag() is your declaration, so "it never
+                      # arrived" is exact, not inferred.
+warn_dead = true      # advisory only: flag chunks no downstream call consumed.
+                      # Never gates — "nothing used it" is read off inferred
+                      # lineage edges, and gating on inference is how you get a
+                      # flaky build.

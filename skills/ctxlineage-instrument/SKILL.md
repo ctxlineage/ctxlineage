@@ -2,10 +2,12 @@
 name: ctxlineage-instrument
 description: >
   Instrument a Python project with ctxlineage so every LLM call's context becomes
-  visible and lineage-traceable. Use when asked to "add ctxlineage to this project",
-  to instrument/trace/record LLM calls, to visualize or debug what an LLM prompt is
-  made of, to find token waste in a RAG or agent app, or to generate/read a
-  ctxlineage report.
+  visible, lineage-traceable, and testable in CI. Use when asked to "add ctxlineage
+  to this project", to instrument/trace/record LLM calls, to visualize or debug what
+  an LLM prompt is made of, to find token waste in a RAG or agent app, to generate or
+  read a ctxlineage report, to assert context contracts / gate context in CI
+  (`ctxlineage test`, `ctxlineage.toml`, window budgets, grounding checks), or to
+  import a Claude Code / `claude -p` session into a report.
 ---
 
 # Instrument a project with ctxlineage
@@ -171,6 +173,71 @@ where that text is assembled, add a tag there, re-run, and re-check
 `match_rate`. Stop when the heavy calls are explained — 100% coverage of
 trivial calls is not the goal.
 
+## Step 7 — Turn the findings into a gate (`ctxlineage test`)
+
+A report tells the user what happened once. A contract keeps it from regressing.
+Once the heavy calls are explained, offer this — it is the payoff for the tags
+added in step 3.
+
+Write `ctxlineage.toml` next to the app:
+
+```toml
+[[assert.window_budget]]
+max_pct = 80             # no call may exceed 80% of the model's window
+
+[[assert.window_budget]]
+segment = "history"      # a segment kind, or a tag name from step 3
+max_pct = 40
+
+[[assert.grounded]]
+tag = "rag_chunks"       # what you retrieved must actually reach the window
+warn_dead = true         # advisory: flag chunks nothing downstream consumed
+```
+
+```bash
+ctxlineage test          # exit 1 on a hard-gate breach → wire into CI
+```
+
+**Set the numbers from what the run actually shows, not from a round number the
+user will have to fight.** Read the current share first (step 5), then set the
+budget above it with headroom.
+
+Rules only gate where their evidence is exact, and this is not negotiable:
+
+- `window_budget` gates any call — token counts are deterministic from capture.
+- `grounded` presence gates **only tagged** content: the `tag()` is the user's
+  declaration, so "it never arrived" is exact. Untagged → it warns instead.
+- dead-context is **always advisory** — "nothing used it" is read off inferred
+  lineage edges, and gating on inference produces a flaky build.
+
+Anything unevaluated (unknown model window, incomplete segments) is reported as
+skipped — **never** as a pass. If the user asks to make a skip fail, the answer
+is to supply the missing evidence (tag the content), not to force the gate.
+
+**CI needs a recorded run**, and it need not be a live one: prompt assembly is
+usually deterministic even when replies are not, so the user's existing test
+suite with mocked responses is the place to start. A live run needs a
+statistical gate (N runs, a pass rate), which does not exist yet — so keep hard
+gates on recorded runs.
+
+## Importing coding-agent sessions
+
+If the user wants to inspect a **Claude Code / `claude -p`** session rather than
+their own app: those are separate, non-Python processes, so `init()` cannot
+patch them — but they write a transcript to disk.
+
+```bash
+ctxlineage import --from claude-code    # newest session for this directory
+ctxlineage report --open
+```
+
+Tell the user what it cannot show, or the report will look broken: token counts
+are the API's own, but the transcript **does not preserve** the system prompt,
+tool definitions, or reasoning text — tens of thousands of tokens that were sent
+and are counted, but whose text is unrecoverable. The report labels that
+remainder explicitly. A `segment=` budget skips such calls for the same reason.
+Live capture via `init()` remains the complete picture.
+
 ## Final checklist
 
 - [ ] `init()` runs once, at process start, before the first LLM call.
@@ -179,3 +246,5 @@ trivial calls is not the goal.
 - [ ] Every heavy context element is tagged with the exact interpolated content.
 - [ ] `source=` / `transform=` recorded where provenance exists.
 - [ ] `ctxlineage report --open` builds; match rate ≈ 1.0 or the gap is explained.
+- [ ] If contracts were added: `ctxlineage test` passes, its numbers come from
+      the real run, and nothing gates on inferred evidence.

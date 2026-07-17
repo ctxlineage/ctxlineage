@@ -218,6 +218,7 @@ def main(argv: list[str] | None = None) -> int:
     out_dir = os.environ.get("CTXLINEAGE_DIR", ".ctxlineage")
     print(f"\nRecorded events to {os.path.join(out_dir, 'events.jsonl')}")
     print("Next: ctxlineage report --open")
+    print("      ctxlineage test -c examples/ctxlineage.toml   # gate the same run in CI")
     return 0
 
 
