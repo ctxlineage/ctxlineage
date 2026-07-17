@@ -59,19 +59,17 @@ class WindowBudget:
                         )
                     )
                     continue
-                if self.segment and not call.get("segments_complete", True):
-                    # The producer declared parts of the real prompt missing, so a
-                    # share-of-window over these segments is not the share of
-                    # anything that was sent. Passing here would be the exact
-                    # failure SKIP exists to prevent (#63).
+                unmeasurable = self._unmeasurable(call)
+                if unmeasurable:
+                    # The producer declared parts of the real prompt missing, and
+                    # what is left cannot stand in for it. Passing here is exactly
+                    # the failure SKIP exists to prevent (#63).
                     findings.append(
                         Finding(
                             self.NAME,
                             SKIP,
-                            f"{_locate(session, call)}: {self._subject()} not evaluated - this "
-                            f"call's segments do not cover the whole prompt "
-                            f"({self._missing(call)}), so a segment budget would measure a "
-                            f"fraction and call it the whole",
+                            f"{_locate(session, call)}: {self._subject()} not evaluated - "
+                            f"{unmeasurable} ({self._missing(call)})",
                         )
                     )
                     continue
@@ -108,6 +106,36 @@ class WindowBudget:
     def _subject(self) -> str:
         return f"segment {self.segment!r}" if self.segment else "the prompt"
 
+    def _unmeasurable(self, call: dict) -> str | None:
+        """Why this call cannot be scored, or None when it can.
+
+        Only ever true for a call whose producer declared its segments partial
+        (an imported transcript). Two ways that bites:
+
+        - a `segment=` budget reads segments directly, so it measures a fraction
+          and would call it the whole;
+        - a whole-prompt budget normally reads the provider's own `usage`, which
+          stays exact no matter what the segments are missing — but an import
+          may carry no usage at all (`import.usage == "unavailable"`), and then
+          the only number left is an estimate over those same partial segments.
+
+        The second case is the one that reads as safe and is not: nothing about
+        "whole prompt" makes a sliver of it measurable.
+        """
+        if call.get("segments_complete", True):
+            return None
+        if self.segment:
+            return (
+                "this call's segments do not cover the whole prompt, so a segment budget "
+                "would measure a fraction and call it the whole"
+            )
+        if self._reported_prompt(call) is None:
+            return (
+                "this call's segments do not cover the whole prompt and no usage was "
+                "reported, so the only number available is an estimate over a fraction of it"
+            )
+        return None
+
     def _missing(self, call: dict) -> str:
         """Name what the producer said it could not recover, for the skip reason."""
         meta = call.get("import") if isinstance(call.get("import"), dict) else {}
@@ -115,6 +143,16 @@ class WindowBudget:
         source = meta.get("source")
         origin = f"imported from {source}" if source else "reconstructed"
         return f"{origin}; not preserved: {', '.join(missing)}" if missing else origin
+
+    @staticmethod
+    def _reported_prompt(call: dict) -> int | None:
+        """The provider's own prompt-token count, or None if it did not report one."""
+        usage = call.get("usage")
+        if isinstance(usage, dict):
+            prompt = usage.get("prompt_tokens")
+            if isinstance(prompt, (int, float)) and not isinstance(prompt, bool) and prompt > 0:
+                return int(prompt)
+        return None
 
     def _used(self, call: dict) -> tuple[int, str, bool]:
         """(tokens, how-we-know, whether the selector matched anything here)."""
@@ -124,11 +162,9 @@ class WindowBudget:
             # rather than let it read as measured.
             segments = [s for s in call["segments"] if s.get("kind") == self.segment]
             return sum(s["tokens_est"] for s in segments), "est.", bool(segments)
-        usage = call.get("usage")
-        if isinstance(usage, dict):
-            prompt = usage.get("prompt_tokens")
-            if isinstance(prompt, (int, float)) and not isinstance(prompt, bool) and prompt > 0:
-                return int(prompt), "reported", True
+        reported = self._reported_prompt(call)
+        if reported is not None:
+            return reported, "reported", True
         return call["input_tokens_est"], "est.", True
 
 

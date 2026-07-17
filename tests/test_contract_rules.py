@@ -183,6 +183,28 @@ def test_whole_prompt_budget_still_gates_imported_calls():
     assert "33,631 reported tokens" in _messages(findings)
 
 
+def test_whole_prompt_budget_skips_an_import_that_reported_no_usage():
+    """The gap #67 left: the whole-prompt form is exact *because* it reads the
+    provider's usage — so when an import carries none, it silently falls back to
+    an estimate over the same partial segments and passes for the wrong reason.
+    The importer allows this (import.usage == "unavailable")."""
+    data = _data(_imported_call("c1", messages=[{"role": "user", "content": "tiny"}], usage=None))
+    findings = runner.run(data, [WindowBudget(max_pct=10)])
+    assert _sev(findings, "skip"), "a sliver of a prompt is not measurable as the prompt"
+    assert not _sev(findings, "fail")
+    assert "no usage was reported" in _messages(findings)
+
+
+def test_whole_prompt_budget_evaluates_live_capture_without_usage():
+    """No regression: live capture without usage is complete, just estimated —
+    the estimate covers the whole prompt, so it must still gate."""
+    messages = [{"role": "user", "content": "word " * 100_000}]
+    data = _data(_llm_call("c1", messages=messages))  # no usage
+    findings = runner.run(data, [WindowBudget(max_pct=80)])
+    assert _sev(findings, "fail")
+    assert not _sev(findings, "skip")
+
+
 def test_segment_budget_still_evaluates_live_capture():
     """Live capture is complete (estimated, but nothing absent) — the guard must
     not turn the normal path into a skip."""
