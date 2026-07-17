@@ -104,6 +104,32 @@ def _block_types(content) -> set:
     return set()
 
 
+# Parts of NOT_PRESERVED (see _import/) that were really in the prompt and
+# really cost window tokens. The rest of that list (request_params, duration_ms,
+# stream_flag) is missing metadata, which costs no tokens and hides no context.
+_PROMPT_BEARING = frozenset({"system_prompt", "tool_definitions", "reasoning_text"})
+
+
+def _segments_complete(payload: dict) -> bool:
+    """Whether the segments account for the whole prompt that was really sent.
+
+    Live capture builds segments from the actual request, so they are complete:
+    the token counts are estimates, but nothing is *absent*. An importer that
+    could not recover the system prompt or tool definitions declares so in
+    `payload["import"]["not_preserved"]`, and that declaration is exact.
+
+    Deliberately not inferred from a token ratio (est. vs reported). A ratio
+    conflates two different things — an estimator disagreeing with the
+    provider's tokenizer, and content that is structurally missing — and the
+    first is normal and unbounded enough that no threshold separates them
+    reliably. Consumers that gate must key on this, not on a ratio (#63).
+    """
+    meta = payload.get("import")
+    if not isinstance(meta, dict):
+        return True  # live capture: the request is the whole request
+    return not (_PROMPT_BEARING & set(meta.get("not_preserved") or ()))
+
+
 def _chat_segments(request: dict) -> list[dict]:
     segments = []
     # anthropic carries the system prompt as a top-level kwarg (str or blocks),
@@ -272,6 +298,8 @@ def _normalize_call(event: dict, span_names=None, span_tags=None) -> tuple[dict,
         "context_window": context_window_for(model),
         "usage": _canonical_usage(payload.get("usage")),
         "segments": segments,
+        "segments_complete": _segments_complete(payload),
+        "import": payload.get("import"),
         "input_tokens_est": sum(s["tokens_est"] for s in segments),
         "tagged_tokens_est": sum(s["tokens_est"] for s in segments if s.get("tagged")),
         "output": output,

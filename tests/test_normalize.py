@@ -872,3 +872,69 @@ def test_anthropic_assembled_indices_sort_numerically():
     )
     call = normalize.build_report_data([_event(payload)])["sessions"][0]["calls"][0]
     assert call["output"]["content"] == "SECOND\nTENTH"
+
+
+# --- #63/#64: does the pipeline know the segments are only part of the prompt? ---
+
+
+def _imported_event(not_preserved, *, call_id="c1"):
+    return {
+        "schema_version": 1,
+        "event_type": "llm_call",
+        "session_id": "s1",
+        "span_id": None,
+        "call_id": call_id,
+        "timestamp": "2026-07-17T00:00:00+00:00",
+        "payload": {
+            "provider": "anthropic",
+            "api": "messages",
+            "request": {
+                "model": "claude-sonnet-5",
+                "messages": [{"role": "user", "content": "hi"}],
+            },
+            "usage": {"input_tokens": 33_631},
+            "import": {"source": "claude-code", "not_preserved": list(not_preserved)},
+        },
+    }
+
+
+def test_live_capture_segments_are_complete():
+    data = normalize.build_report_data(
+        [
+            {
+                "schema_version": 1,
+                "event_type": "llm_call",
+                "session_id": "s1",
+                "span_id": None,
+                "call_id": "c1",
+                "timestamp": "2026-07-17T00:00:00+00:00",
+                "payload": {
+                    "provider": "openai",
+                    "api": "chat.completions",
+                    "request": {
+                        "model": "gpt-4o-mini",
+                        "messages": [{"role": "user", "content": "hi"}],
+                    },
+                },
+            }
+        ]
+    )
+    call = data["sessions"][0]["calls"][0]
+    assert call["segments_complete"] is True
+    assert call["import"] is None
+
+
+def test_import_missing_prompt_bearing_parts_is_incomplete():
+    data = normalize.build_report_data(
+        [_imported_event(("system_prompt", "tool_definitions", "reasoning_text"))]
+    )
+    call = data["sessions"][0]["calls"][0]
+    assert call["segments_complete"] is False
+    assert call["import"]["source"] == "claude-code"
+
+
+def test_import_missing_only_metadata_is_still_complete():
+    """The flag is about content that was in the window, not about being an
+    import: duration/stream flags cost no tokens and hide no context."""
+    data = normalize.build_report_data([_imported_event(("duration_ms", "stream_flag"))])
+    assert data["sessions"][0]["calls"][0]["segments_complete"] is True

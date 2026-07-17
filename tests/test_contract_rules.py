@@ -57,6 +57,23 @@ def _llm_call(
     }
 
 
+def _imported_call(call_id, *, session="s1", messages=None, usage=None, not_preserved=None):
+    """A call reconstructed from an agent transcript: the segments are only the
+    part that could be rebuilt, and the producer says so."""
+    event = _llm_call(call_id, session=session, messages=messages, usage=usage)
+    event["payload"]["import"] = {
+        "source": "claude-code",
+        "usage": "reconstructed",
+        "segment_tokens": "estimated",
+        "not_preserved": list(
+            not_preserved
+            if not_preserved is not None
+            else ("system_prompt", "tool_definitions", "reasoning_text")
+        ),
+    }
+    return event
+
+
 def _span_start(span, name, *, session="s1"):
     return {
         "schema_version": 1,
@@ -134,6 +151,71 @@ def test_window_budget_falls_back_to_the_estimate_without_usage():
     findings = runner.run(data, [WindowBudget(max_pct=80)])
     assert _sev(findings, "fail")
     assert "est." in _messages(findings)
+
+
+# --- #63: segments that do not cover the prompt must not be scored ----------
+
+
+def test_segment_budget_skips_when_segments_do_not_cover_the_prompt():
+    """The #63 regression: an imported call's segments are a sliver of the real
+    prompt, so scoring them as a share of the window passes for the wrong
+    reason. It must skip, not pass."""
+    data = _data(
+        _imported_call(
+            "c1",
+            messages=[{"role": "user", "content": "tiny"}],
+            usage={"prompt_tokens": 33_631},
+        )
+    )
+    findings = runner.run(data, [WindowBudget(segment="user", max_pct=10)])
+    assert _sev(findings, "skip"), "an unevaluated assertion must never report as a pass"
+    assert not _sev(findings, "fail")
+    assert "do not cover the whole prompt" in _messages(findings)
+    assert "system_prompt" in _messages(findings)  # says *what* is missing
+
+
+def test_whole_prompt_budget_still_gates_imported_calls():
+    """Only the segment form is unsafe: the whole-prompt form reads the real
+    reported usage, so it must keep gating imports exactly as before."""
+    data = _data(_imported_call("c1", usage={"prompt_tokens": 33_631}))
+    findings = runner.run(data, [WindowBudget(max_pct=10)])
+    assert _sev(findings, "fail")
+    assert "33,631 reported tokens" in _messages(findings)
+
+
+def test_segment_budget_still_evaluates_live_capture():
+    """Live capture is complete (estimated, but nothing absent) — the guard must
+    not turn the normal path into a skip."""
+    messages = [{"role": "user", "content": "word " * 100_000}]
+    data = _data(_llm_call("c1", messages=messages))
+    findings = runner.run(data, [WindowBudget(segment="user", max_pct=10)])
+    assert _sev(findings, "fail")
+    assert not _sev(findings, "skip")
+
+
+def test_segment_budget_evaluates_imports_that_preserved_the_prompt():
+    """The guard keys on the declaration, not on 'is it an import': a transcript
+    missing only non-prompt metadata still supports a segment budget."""
+    messages = [{"role": "user", "content": "word " * 100_000}]
+    data = _data(
+        _imported_call("c1", messages=messages, not_preserved=("duration_ms", "stream_flag"))
+    )
+    findings = runner.run(data, [WindowBudget(segment="user", max_pct=10)])
+    assert _sev(findings, "fail")
+    assert not _sev(findings, "skip")
+
+
+def test_unknown_window_does_not_claim_the_segment_is_missing():
+    """When every call skipped, the segment's absence was never established —
+    telling the user to check the name sends them after a typo that isn't there."""
+    data = _data(
+        _llm_call(
+            "c1", model="some-unknown-model-v9", messages=[{"role": "system", "content": "x"}]
+        )
+    )
+    findings = runner.run(data, [WindowBudget(segment="system", max_pct=40)])
+    assert _sev(findings, "skip")
+    assert "never appeared" not in _messages(findings)
 
 
 def test_window_budget_segment_scope_sums_only_that_kind():
