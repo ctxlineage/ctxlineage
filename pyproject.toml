@@ -34,6 +34,11 @@ Changelog = "https://github.com/ctxlineage/ctxlineage/blob/main/CHANGELOG.md"
 [project.optional-dependencies]
 mcp = ["mcp>=1.2"]
 
+# Registers the plugin in any suite that has ctxlineage installed; it stays
+# inert until --ctxlineage (or the `ctxlineage` ini option) asks for it.
+[project.entry-points.pytest11]
+ctxlineage = "ctxlineage._pytest_plugin"
+
 [project.scripts]
 ctxlineage = "ctxlineage._cli:main"
 ctxl = "ctxlineage._cli:main"

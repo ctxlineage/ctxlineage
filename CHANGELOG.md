@@ -8,6 +8,20 @@ land in minor versions).
 ## [Unreleased]
 
 ### Added
+- **pytest plugin** (#72): `pytest --ctxlineage` evaluates the same
+  `ctxlineage.toml` contracts *inside* the suite that produces the events, and
+  fails **the individual test** whose call breached a hard gate — the per-test
+  attribution `ctxlineage test` structurally cannot give (it gates the whole
+  run). Same runner, same tier rule: a warning never gates, and a call that
+  could not be evaluated is reported as skipped, never a green test.
+  - **Inert until opted in** with `--ctxlineage` (or `ctxlineage = true` in the
+    pytest ini) — installing ctxlineage never changes a shared suite's
+    behaviour. Owns `ctxlineage.init()` into a throwaway temp dir unless the app
+    already called `init()`, in which case it uses the app's own directory.
+  - Attribution rides on the append-only log: each test is scored over exactly
+    the bytes written during its own phase, and events belonging to no test
+    (import time, session fixtures, teardown) are swept and evaluated rather
+    than left silently unchecked.
 - **Import coding-agent sessions** (#57): `ctxlineage import --from claude-code`
   turns a Claude Code / `claude -p` session transcript into ordinary
   `events.jsonl`, so the four views, `ctxlineage test` and the MCP server all
