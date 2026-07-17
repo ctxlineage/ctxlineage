@@ -7,6 +7,11 @@ land in minor versions).
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-07-18
+
+Context you can **test**, and coding-agent sessions you can **import** — the two
+v0.2 tracks, plus the honesty fixes found building them.
+
 ### Added
 - **pytest plugin** (#72): `pytest --ctxlineage` evaluates the same
   `ctxlineage.toml` contracts *inside* the suite that produces the events, and
@@ -70,12 +75,14 @@ land in minor versions).
   a stream finished rewrote the record of what had already been sent. It is now
   snapshotted per key, falling back to the live reference for anything that
   cannot be copied.
-- **A segment budget no longer passes over a prompt it cannot see** (#63):
+- **A budget no longer passes over a prompt it cannot see** (#63, #71):
   `window_budget` with `segment=` scored only the reconstructed part of an
   imported call — a few tokens of a 33k prompt — and reported a confident green.
-  Where a call's segments do not cover the whole prompt, it now skips and says
-  what is missing. The whole-prompt form reads the provider's own `usage`, so it
-  keeps gating imports exactly as before.
+  It now skips such a call and says what is missing. The whole-prompt form
+  stays exact when the provider reported `usage` (it reads that number, not the
+  segments), and skips too when an import carried no usage at all — otherwise it
+  would fall back to an estimate over the same partial segments and pass for the
+  same wrong reason.
 - **Imported calls disclose what the transcript could not preserve** (#64): the
   call anatomy proportioned segments against their own sum, so a handful of
   reconstructed tokens filled the whole bar and a 4-token segment read as "50%
