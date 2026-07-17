@@ -178,4 +178,65 @@ hard guardrail and must stay clearly marked future + non-judge.
 
 1. **Placement:** post-v0.1.0 track (a future v0.2 / "M5"). v1 visualization (M2–M4) is untouched.
 2. **Gate substrate:** the tag API = ctxlineage's `ref()`. Tagged → hard gate; untagged → advisory.
-3. **Issues:** a single tracking issue for this track; the M2–M4 milestone issues are not touched.
+3. **Issues:** a single tracking issue for this track (#14); the M2–M4 milestone issues are not touched.
+
+## 14. v0.2 first slice — concrete plan (decided 2026-07-17)
+
+The #17 positioning discussion promoted this to the **v0.2 "depth" track** (its
+twin "width" track is #57, coding-agent transcript import). Design written now,
+during the v0.1.0 release, so the launch can point at a concrete plan; **no
+implementation lands until v0.1.0 tags.**
+
+**Decision: ship one shared assertion runner carrying two rule types at once.**
+The expensive part is the runner/plumbing, not the rules — both rule types read
+data the report pipeline already produces (`build_report_data`), so shipping
+both is barely more than shipping one, and each covers the other's weakness:
+
+- **`window_budget` — the wide on-ramp (no tags required).** Any call has a
+  window %, so the whole auto-patch audience can gate day one. Delivers the
+  "context tests in CI" aha to the most people; catches silent context bloat
+  (agent-loop accumulation, RAG top-k creep). Lower differentiation on its own,
+  but maximal reach — like a bundle-size / perf budget.
+- **`grounded` — the differentiation proof (tags required → hard gate).**
+  Requires the lineage/tag substrate, so no trace/graph competitor can express
+  it — this is the positioning made executable. First deterministic variants:
+  **presence** (a tagged element actually landed in the window — this is the
+  per-element match rate as an assertion) and **dead-context** (a tagged
+  element no downstream call consumed → wasted tokens). The compelling
+  *utilization* variant ("did the output actually use it?") is not
+  deterministic → explicitly deferred to the LLM-judge top of the pyramid (§7),
+  never shipped as a deterministic claim.
+
+**Sketch (provisional names):**
+
+```toml
+# ctxlineage.toml  — read by `ctxlineage test` (and/or a pytest plugin)
+[[assert.window_budget]]
+max_pct = 80                 # no call may exceed 80% of the model window
+[[assert.window_budget]]
+segment = "history"
+max_pct = 40                 # history may not eat >40% of the window
+[[assert.grounded]]
+tag = "rag_chunks"           # every rag_chunks tag must land in the window (presence)
+warn_dead = true             # advisory: flag rag_chunks no downstream call consumed
+```
+
+```
+ctxlineage test              # exit non-zero on any hard-gate failure → CI gate
+```
+
+**Tier rule (from §6, unchanged):** `window_budget` is deterministic from
+capture alone and can hard-gate untagged. `grounded` hard-gates only where a tag
+makes the lineage exact; on inferred lineage it degrades to advisory (warn).
+
+**Scope guard (§10, §12):** a *handful* of built-in relations plus a plugin
+hook — **not a framework**. Deterministic contract tests over the recorded
+artifact, never model-quality scoring. Stays a Non-Goal: LLM-judge quality
+scoring, eval datasets, benchmarks.
+
+**Build order for the slice:** (1) the runner + `ctxlineage.toml` schema +
+`ctxlineage test` CLI exit-code plumbing (the shared cost); (2) `window_budget`
+(data already in `calls[].usage`/`context_window`/segment `tokens_est`);
+(3) `grounded` presence + dead-context (data already in `elements[].matched` /
+`sources` / `calls` and the lineage edges). Regression/differential testing
+(§8) and metamorphic (§8) are the *next* slices, not this one.
