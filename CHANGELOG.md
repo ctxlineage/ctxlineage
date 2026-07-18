@@ -7,6 +7,17 @@ land in minor versions).
 
 ## [Unreleased]
 
+### Fixed
+- A response that is already a plain `dict` — a raw-response wrapper, a mocked
+  client, or a non-pydantic SDK shape — is no longer stringified on capture. It
+  had no `model_dump`, so it fell through to `str(obj)` and was stored as a
+  Python repr, which also dropped `usage` (read only off a dict). Such calls now
+  keep their structured body and token counts.
+- `ctxlineage import` no longer prints a coverage over 100%. On a short prompt
+  the token estimate can exceed the provider's own reported count; the summary
+  clamps the displayed coverage at 100% and drops the "the rest is the system
+  prompt…" clause when there is no remainder to describe.
+
 ## [0.2.0] - 2026-07-18
 
 Context you can **test**, and coding-agent sessions you can **import** — the two

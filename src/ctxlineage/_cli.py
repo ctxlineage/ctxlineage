@@ -248,11 +248,25 @@ def import_(
         if m.get("prompt_tokens_reported")
     ]
     if shares:
-        click.echo(
-            f"  reconstructed segments cover {min(shares):.0%}-{max(shares):.0%} of each "
-            "call's real prompt tokens; the rest is the system prompt, the tool "
-            "definitions and reasoning text, which the transcript does not preserve."
-        )
+        # The estimate (tiktoken) and the provider's own tokenizer disagree, so
+        # for a short prompt a reconstructed share can meet or slightly exceed
+        # the reported count. Clamp the displayed coverage at 100% - never claim
+        # >100% - and only speak of a missing remainder when there is one.
+        lo, hi = min(min(shares), 1.0), min(max(shares), 1.0)
+        span = f"{lo:.0%}" if lo == hi else f"{lo:.0%}-{hi:.0%}"
+        message = f"  reconstructed segments cover {span} of each call's real prompt tokens"
+        if hi < 1.0:
+            message += (
+                "; the rest is the system prompt, the tool definitions and reasoning "
+                "text, which the transcript does not preserve."
+            )
+        else:
+            message += (
+                " (an estimate; a short prompt's segments can meet or exceed the "
+                "reported count, but the system prompt and tool definitions the "
+                "transcript omits still cost tokens it cannot show)."
+            )
+        click.echo(message)
     stripped = sum(
         1
         for call in calls
