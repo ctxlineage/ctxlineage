@@ -17,11 +17,22 @@ from ctxlineage._report.tokens import estimate_tokens
 REPORT_VERSION = 1
 
 # Prefix-matched, longest prefix wins. Deliberately small: an honest null
-# ("unknown") beats a stale guess for models not listed here.
+# ("unknown") beats a stale guess for models not listed here. The entries below
+# are all *frozen* model snapshots — a released model's context window never
+# changes — so hardcoding them carries none of the "stale guess" risk that
+# keeps newer, still-moving models off this list. A more specific prefix
+# overrides a shorter one (o1-mini is 128k even though bare o1 is 200k).
 MODEL_CONTEXT_WINDOWS = {
     "gpt-4o": 128_000,
     "gpt-4.1": 1_047_576,
+    "gpt-4-turbo": 128_000,
+    "gpt-4-32k": 32_768,
+    "gpt-4": 8_192,
+    "gpt-3.5-turbo": 16_385,
     "gpt-5": 400_000,
+    "o1-mini": 128_000,
+    "o1-preview": 128_000,
+    "o1": 200_000,
     "o3": 200_000,
     "o4": 200_000,
     "claude-": 200_000,

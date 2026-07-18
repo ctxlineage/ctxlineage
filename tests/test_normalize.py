@@ -206,6 +206,26 @@ def test_unknown_model_context_window_is_null():
     assert data["sessions"][0]["calls"][0]["context_window"] is None
 
 
+@pytest.mark.parametrize(
+    "model, expected",
+    [
+        # Frozen snapshots whose absence made window_budget silently skip.
+        ("gpt-4-turbo-2024-04-09", 128_000),
+        ("gpt-4-0613", 8_192),
+        ("gpt-4-32k", 32_768),
+        ("gpt-3.5-turbo-0125", 16_385),
+        ("o1-2024-12-17", 200_000),
+        ("o1-mini", 128_000),
+        ("o1-preview", 128_000),
+        # A more specific prefix must win over a shorter one, both directions.
+        ("gpt-4o-mini", 128_000),  # gpt-4o, not the new bare gpt-4 -> 8k
+        ("gpt-4.1-mini", 1_047_576),  # gpt-4.1, not gpt-4 -> 8k
+    ],
+)
+def test_known_model_context_windows(model, expected):
+    assert normalize.context_window_for(model) == expected
+
+
 def test_load_events_skips_malformed_lines(tmp_path):
     path = tmp_path / "events.jsonl"
     good = _event(_chat_payload())
