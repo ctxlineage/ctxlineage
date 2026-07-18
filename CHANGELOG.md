@@ -7,6 +7,12 @@ land in minor versions).
 
 ## [Unreleased]
 
+### Changed
+- The read-side commands (`report`, `test`, `import`) and the MCP server now
+  honour the `CTXLINEAGE_DIR` environment variable, the same way `init()`
+  already does. A directory set once for capture no longer has to be repeated
+  with `--dir` on every read (an explicit `--dir` still wins).
+
 ### Fixed
 - A response that is already a plain `dict` — a raw-response wrapper, a mocked
   client, or a non-pydantic SDK shape — is no longer stringified on capture. It
@@ -17,6 +23,16 @@ land in minor versions).
   the token estimate can exceed the provider's own reported count; the summary
   clamps the displayed coverage at 100% and drops the "the rest is the system
   prompt…" clause when there is no remainder to describe.
+- A corrupt or truncated byte in `events.jsonl` — a process killed mid-write
+  leaves one at EOF — no longer aborts every command with a raw
+  `UnicodeDecodeError`. The broken line is skipped and counted like any other
+  malformed line, and the rest of the log still renders.
+- `report --out path/into/a/missing/dir.html` now creates the parent directory
+  instead of crashing with `FileNotFoundError` (same for the MCP
+  `generate_report` tool).
+- `report` over a log with no recorded calls now prints why it is empty
+  (capture not wired up, or the wrong `--dir`) instead of silently writing a
+  blank report.
 
 ## [0.2.0] - 2026-07-18
 

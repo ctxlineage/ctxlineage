@@ -28,6 +28,8 @@ def main() -> None:
     "directory",
     default=".ctxlineage",
     show_default=True,
+    show_envvar=True,
+    envvar="CTXLINEAGE_DIR",
     help="Directory containing events.jsonl.",
 )
 @click.option(
@@ -76,6 +78,10 @@ def report(
         return
 
     out_path = Path(out)
+    # Create the parent directory so `--out reports/run.html` works instead of
+    # crashing with a bare FileNotFoundError at the user. A bare filename has
+    # parent "." — mkdir is then a harmless no-op.
+    out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(html.render(data), encoding="utf-8")
     summary = (
         f"{data['stats']['calls']} call(s) across {data['stats']['sessions']} session(s)"
@@ -83,6 +89,15 @@ def report(
         + (f", {redacted} match(es) redacted" if redact_patterns else "")
     )
     click.echo(f"Wrote {out_path} ({summary})")
+    if not data["stats"]["calls"]:
+        # An empty report is almost always a wiring problem, not a real result;
+        # unlike `test` (which must gate), `report` still writes the file, but
+        # it should say why it is blank rather than leave the user guessing.
+        click.echo(
+            "Note: no LLM calls were recorded - did your app run under "
+            "ctxlineage.init()? (Check the --dir path if capture wrote elsewhere.)",
+            err=True,
+        )
     if open_browser:
         webbrowser.open(out_path.resolve().as_uri())
 
@@ -94,6 +109,8 @@ def report(
     "directory",
     default=".ctxlineage",
     show_default=True,
+    show_envvar=True,
+    envvar="CTXLINEAGE_DIR",
     help="Directory containing events.jsonl.",
 )
 @click.option(
@@ -181,6 +198,8 @@ def _imported_session_ids(events_path: Path) -> set:
     "directory",
     default=".ctxlineage",
     show_default=True,
+    show_envvar=True,
+    envvar="CTXLINEAGE_DIR",
     help="Directory holding events.jsonl.",
 )
 @click.option("--dry-run", is_flag=True, help="Report what would be imported; write nothing.")

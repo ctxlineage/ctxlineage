@@ -252,6 +252,7 @@ def generate_report(out: str = "ctxlineage-report.html") -> dict:
         raise ValueError(
             f"Refusing to write {out!r}: the event-log directory {store_dir} is read-only"
         )
+    out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(html.render(data), encoding="utf-8")
     return {
         "path": str(out_path.resolve()),
@@ -268,6 +269,8 @@ def generate_report(out: str = "ctxlineage-report.html") -> dict:
     "directory",
     default=".ctxlineage",
     show_default=True,
+    show_envvar=True,
+    envvar="CTXLINEAGE_DIR",
     help="Directory containing events.jsonl.",
 )
 def main(directory: str) -> None:
