@@ -16,7 +16,7 @@ Useful while hacking on the report UI:
 
 ```bash
 uv run python examples/generate_demo_events.py /tmp/demo
-CTXLINEAGE_DIR=/tmp/demo uv run ctxlineage report --open
+uv run ctxlineage report --dir /tmp/demo --open
 ```
 
 ## Ground rules
