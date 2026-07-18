@@ -134,7 +134,17 @@ def suite(pytester):
             # test — itself already inside playwright's scope — the sub-run's
             # wrapper would raise "nested soft assertion scopes are not
             # supported". '-p no:<name>' is a no-op when the plugin is absent.
-            return pytester.runpytest_inprocess("-p", "no:playwright", *args)
+            #
+            # The sub-pytest gets a throwaway rootdir with no config, so mirror
+            # the repo's async-fixture loop scope here too — otherwise every
+            # sub-run re-emits the pytest-asyncio "unset default" deprecation.
+            return pytester.runpytest_inprocess(
+                "-p",
+                "no:playwright",
+                "-o",
+                "asyncio_default_fixture_loop_scope=function",
+                *args,
+            )
 
         return _run
 
