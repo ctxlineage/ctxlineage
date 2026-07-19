@@ -69,6 +69,10 @@ packages = ["src/ctxlineage", "src/ctxlineage_mcp"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+# Pin the async-fixture loop scope so pytest-asyncio does not emit its
+# "unset default" deprecation warning on every run; "function" is the value
+# the suite already relies on (each async test gets a fresh loop).
+asyncio_default_fixture_loop_scope = "function"
 
 [tool.ruff]
 line-length = 100
