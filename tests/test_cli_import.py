@@ -10,6 +10,10 @@ from ctxlineage._cli import main
 
 FIXTURES = Path(__file__).parent / "fixtures" / "claude_code"
 TRANSCRIPT = FIXTURES / "session_tool_loop.jsonl"
+# A call whose reported prompt is 1 token but whose reconstructed user text
+# estimates to several — the estimator (tiktoken) overshooting the provider's
+# own count on a short prompt.
+OVERSHOOT = FIXTURES / "session_overshoot.jsonl"
 
 
 @pytest.fixture
@@ -56,6 +60,26 @@ def test_import_reports_coverage_per_call_never_summed(runner, tmp_path):
     describe no real quantity. Coverage is expressed per call instead."""
     result = run_import(runner, tmp_path)
     assert "of each call's real prompt tokens" in result.output
+
+
+def test_import_coverage_never_exceeds_100pct(runner, tmp_path):
+    """When the estimate overshoots the reported count, coverage clamps to 100%
+    rather than printing an impossible >100% share followed by a 'the rest is
+    the system prompt...' clause that then describes nothing."""
+    import re
+
+    result = runner.invoke(
+        main, ["import", "--from", "claude-code", str(OVERSHOOT), "--dir", str(tmp_path)]
+    )
+    assert result.exit_code == 0, result.output
+    cover_line = next(
+        line for line in result.output.splitlines() if "reconstructed segments cover" in line
+    )
+    assert "cover 100%" in cover_line
+    assert "an estimate" in cover_line
+    assert all(int(pct) <= 100 for pct in re.findall(r"(\d+)%", cover_line))
+    # No false remainder claim when there is no remainder.
+    assert "the rest is the system prompt" not in cover_line
 
 
 def test_import_discloses_stripped_reasoning_blocks(runner, tmp_path):

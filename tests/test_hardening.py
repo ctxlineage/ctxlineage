@@ -11,13 +11,30 @@ import respx
 
 import ctxlineage
 from ctxlineage._events import EventWriter
-from ctxlineage._instrument import anthropic_patch, openai_patch
+from ctxlineage._instrument import _common, anthropic_patch, openai_patch
 from ctxlineage._instrument._common import base_payload
 
 CHAT_URL = "https://api.openai.com/v1/chat/completions"
 MESSAGES_URL = "https://api.anthropic.com/v1/messages"
 SSE_HEADERS = {"content-type": "text/event-stream"}
 MESSAGES = [{"role": "user", "content": "Say hello"}]
+
+
+def test_dump_keeps_a_plain_dict_response_and_its_usage(monkeypatch):
+    """A response that is already a dict (raw-response wrapper, mocked client,
+    non-pydantic SDK shape) has no model_dump. Without the dict fast path it
+    would be stringified and record_response would then read usage=None off a
+    str, silently losing the token counts of a real call."""
+    resp = {"id": "x", "usage": {"prompt_tokens": 7, "completion_tokens": 3}}
+    assert _common.dump(resp) == resp
+
+    captured: dict = {}
+    monkeypatch.setattr(
+        _common._state, "emit", lambda event_type, payload, **kw: captured.update(payload=payload)
+    )
+    _common.record_response({}, resp)
+    assert captured["payload"]["response"] == resp
+    assert captured["payload"]["usage"] == {"prompt_tokens": 7, "completion_tokens": 3}
 
 
 @respx.mock

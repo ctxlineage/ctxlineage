@@ -49,6 +49,13 @@ def base_payload(provider: str, api: str, kwargs: dict) -> dict:
 
 
 def dump(obj):
+    # A response that is already a plain dict (a raw-response wrapper, a mocked
+    # client, or a non-pydantic SDK shape) has no model_dump, so without this
+    # it would fall through to str(obj) and be stored as a Python repr — losing
+    # the structured body and, with it, usage (record_response only reads usage
+    # off a dict). Keep the dict.
+    if isinstance(obj, dict):
+        return obj
     try:
         return obj.model_dump(mode="json")
     except Exception:
