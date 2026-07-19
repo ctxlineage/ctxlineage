@@ -8,13 +8,15 @@ land in minor versions).
 ## [Unreleased]
 
 ### Added
-- Context windows for more well-known, frozen OpenAI snapshots: `gpt-4-turbo`
-  (128k), `gpt-4` (8k), `gpt-4-32k` (32k), `gpt-3.5-turbo` (16k) and the `o1`
-  family (200k, with `o1-mini` / `o1-preview` at 128k). These previously
-  resolved to "unknown", which made `window_budget` silently **skip** every call
-  on those models — a CI budget gate that quietly did nothing. A released
-  model's window never changes, so these carry none of the "stale guess" risk
-  that keeps still-moving models off the list.
+- Context windows for more well-known OpenAI models: `gpt-4-turbo` (128k),
+  `gpt-4-32k` (32k) and the `o1` family (200k, with `o1-mini` / `o1-preview` at
+  128k). These previously resolved to "unknown", which made `window_budget`
+  silently **skip** every call on those models — a CI budget gate that quietly
+  did nothing. Only *homogeneous* prefix families are added (every model ID
+  under the prefix shares one window); bare `gpt-4` / `gpt-3.5-turbo` are left
+  unlisted on purpose, because those prefixes straddle mixed-window families
+  (`gpt-4-0613` 8k vs `gpt-4-1106-preview` 128k; `gpt-3.5-turbo-instruct` 4k),
+  where an honest skip beats a confidently wrong number.
 
 ### Changed
 - The read-side commands (`report`, `test`, `import`) and the MCP server now
