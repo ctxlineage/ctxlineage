@@ -206,6 +206,48 @@ def test_unknown_model_context_window_is_null():
     assert data["sessions"][0]["calls"][0]["context_window"] is None
 
 
+@pytest.mark.parametrize(
+    "model, expected",
+    [
+        # Homogeneous frozen families whose absence made window_budget skip.
+        ("gpt-4-turbo-2024-04-09", 128_000),
+        ("gpt-4-turbo-preview", 128_000),
+        ("gpt-4-32k", 32_768),
+        ("gpt-4-32k-0613", 32_768),
+        ("o1-2024-12-17", 200_000),
+        ("o1-pro", 200_000),
+        ("o1-mini", 128_000),
+        ("o1-mini-2024-09-12", 128_000),
+        ("o1-preview", 128_000),
+        # A more specific prefix must win over a shorter one, both directions.
+        ("gpt-4o-mini", 128_000),  # gpt-4o, not o1/gpt-4-*
+        ("gpt-4.1-mini", 1_047_576),  # gpt-4.1
+    ],
+)
+def test_known_model_context_windows(model, expected):
+    assert normalize.context_window_for(model) == expected
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        # Mixed-window families: a bare gpt-4 / gpt-3.5-turbo prefix would
+        # confidently mis-size half of these (e.g. gpt-4-1106-preview is really
+        # 128k, gpt-3.5-turbo-instruct really 4k), so we skip them honestly
+        # rather than return a wrong window that a CI budget gate would trust.
+        "gpt-4-0613",
+        "gpt-4-1106-preview",
+        "gpt-4-0125-preview",
+        "gpt-4-vision-preview",
+        "gpt-3.5-turbo-0125",
+        "gpt-3.5-turbo-instruct",
+        "mystery-model",
+    ],
+)
+def test_mixed_or_unknown_models_stay_unknown(model):
+    assert normalize.context_window_for(model) is None
+
+
 def test_load_events_skips_malformed_lines(tmp_path):
     path = tmp_path / "events.jsonl"
     good = _event(_chat_payload())
