@@ -127,7 +127,9 @@ class WindowBudget:
         if self.segment:
             return (
                 "this call's segments do not cover the whole prompt, so a segment budget "
-                "would measure a fraction and call it the whole"
+                "would measure a fraction and call it the whole; segment budgets need the "
+                "exact segments of native ctxlineage.init() capture, which an import cannot "
+                "reconstruct"
             )
         if self._reported_prompt(call) is None:
             return (

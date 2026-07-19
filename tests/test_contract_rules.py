@@ -172,6 +172,8 @@ def test_segment_budget_skips_when_segments_do_not_cover_the_prompt():
     assert not _sev(findings, "fail")
     assert "do not cover the whole prompt" in _messages(findings)
     assert "system_prompt" in _messages(findings)  # says *what* is missing
+    # #83: the skip names the remedy, not just the problem - native capture.
+    assert "native ctxlineage.init() capture" in _messages(findings)
 
 
 def test_whole_prompt_budget_still_gates_imported_calls():

@@ -334,6 +334,31 @@ def test_zero_recorded_calls_never_reads_as_passed(suite):
     section = contract_section(result.stdout.str())
     assert "passed" not in section.lower()
     assert "0 calls recorded" in section
+    # #82: a green run that gated nothing must say so, not pass in silence.
+    assert "0 of 1 test(s) produced a gateable LLM call" in section
+    assert "provider mocked?" in section
+
+
+def test_gateable_note_counts_tests_that_produced_calls(suite):
+    """#82: when some tests produce calls and some don't, report the ratio
+    (and drop the 'mocked?' hint, since real calls clearly do get through)."""
+    run = suite(
+        f"def test_real(call_llm):\n    call_llm(prompt_tokens={PASS_TOKENS})\n"
+        "\n"
+        "def test_no_call():\n    assert True\n"
+    )
+    result = run("--ctxlineage")
+    section = contract_section(result.stdout.str())
+    assert "1 of 2 test(s) produced a gateable LLM call" in section
+    assert "provider mocked?" not in section
+
+
+def test_gateable_note_absent_when_every_test_gated(suite):
+    """No nudge when there is nothing to nudge about - all tests produced a call."""
+    run = suite(f"def test_real(call_llm):\n    call_llm(prompt_tokens={PASS_TOKENS})\n")
+    result = run("--ctxlineage")
+    section = contract_section(result.stdout.str())
+    assert "produced a gateable LLM call" not in section
 
 
 def test_missing_config_is_a_usage_error(suite):
