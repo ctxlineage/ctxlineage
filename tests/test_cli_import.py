@@ -101,6 +101,28 @@ def test_reimport_refused_to_avoid_double_counting(runner, tmp_path):
     assert "already in" in result.output
 
 
+def test_import_honors_ctxlineage_dir_env(runner, tmp_path):
+    """The env var now steers where imports land, matching capture/read side."""
+    result = runner.invoke(
+        main,
+        ["import", "--from", "claude-code", str(TRANSCRIPT)],
+        env={"CTXLINEAGE_DIR": str(tmp_path)},
+    )
+    assert result.exit_code == 0, result.output
+    assert (tmp_path / "events.jsonl").exists()
+
+
+def test_import_tolerates_corrupt_transcript_bytes(runner, tmp_path):
+    """A non-UTF-8 byte in the transcript is skipped, not a hard crash."""
+    corrupt = tmp_path / "corrupt.jsonl"
+    corrupt.write_bytes(TRANSCRIPT.read_bytes() + b"\xff\xfe torn line\n")
+    result = runner.invoke(
+        main, ["import", "--from", "claude-code", str(corrupt), "--dir", str(tmp_path)]
+    )
+    assert result.exit_code == 0, result.output
+    assert "malformed line(s) skipped" in result.output
+
+
 def test_unknown_adapter_rejected(runner, tmp_path):
     result = runner.invoke(main, ["import", "--from", "nope", str(TRANSCRIPT)])
     assert result.exit_code != 0

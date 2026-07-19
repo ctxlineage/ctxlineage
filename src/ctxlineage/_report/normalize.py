@@ -29,8 +29,17 @@ MODEL_CONTEXT_WINDOWS = {
 
 
 def load_events(path: str | os.PathLike) -> tuple[list[dict], int]:
-    """Parse a JSONL file; returns (events, skipped_line_count)."""
-    return parse_events(Path(path).read_text(encoding="utf-8"))
+    """Parse a JSONL file; returns (events, skipped_line_count).
+
+    Read with ``errors="replace"`` so a corrupt or truncated byte sequence
+    (a process killed mid-write leaves one at EOF) degrades gracefully rather
+    than aborting every command with a raw ``UnicodeDecodeError``. JSONL is
+    UTF-8 by construction, so undecodable bytes only appear on a genuinely
+    broken line: that line then either fails JSON parsing and is counted as
+    skipped, or parses with the bad bytes replaced by U+FFFD — never taking the
+    rest of the log down with it.
+    """
+    return parse_events(Path(path).read_text(encoding="utf-8", errors="replace"))
 
 
 def parse_events(text: str) -> tuple[list[dict], int]:
