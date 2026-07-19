@@ -47,6 +47,10 @@ ctxlineage report --open   # one self-contained HTML file
 That's the whole integration. Streaming, async, tool calls — captured.
 Add `.ctxlineage/` to your `.gitignore`.
 
+Every command is also available as `ctxl`. `ctxlineage report --json` prints the
+normalized report data to stdout instead of writing HTML, if you want to pipe it
+somewhere.
+
 ## What you get
 
 | View | Question it answers |
@@ -212,8 +216,11 @@ ctxlineage import --from claude-code --dry-run   # show what it would do, write 
 ctxlineage report --open                   # renders like any captured session
 ```
 
-The transcript becomes ordinary `events.jsonl`, so the four views, `ctxlineage
-test`, and the MCP server all work on it unchanged.
+Imported events land in `.ctxlineage/` (retarget with `-d/--dir`), alongside
+anything `init()` already captured. Re-importing a session already in the log is
+refused rather than silently double-counting it — pass `--dir` to import a copy
+elsewhere. The transcript becomes ordinary `events.jsonl`, so the four views,
+`ctxlineage test`, and the MCP server all work on it unchanged.
 
 **What a transcript cannot tell you.** This is reconstruction, not capture, and
 the gaps are real — the report is honest about them rather than inventing
@@ -233,6 +240,38 @@ system prompt and tool definitions alone can be tens of thousands of tokens.
 remainder is recorded per call. Live capture via `ctxlineage.init()` remains the
 complete picture; import is the bridge to processes you cannot patch.
 
+## Querying the report from an agent (MCP server)
+
+The same recorded artifact is exposed to MCP-speaking clients (Claude Code,
+Claude Desktop, …) through a **read-only** server, so an agent can ask about a
+run instead of you eyeballing the HTML. It reads the same local `events.jsonl`;
+nothing is transmitted.
+
+```bash
+pip install "ctxlineage[mcp]"     # the server ships in the mcp extra
+ctxlineage-mcp --dir .ctxlineage  # stdio transport; -d defaults to .ctxlineage
+```
+
+Point an MCP client at it — e.g. for Claude Code:
+
+```jsonc
+// .mcp.json  (or your client's MCP config)
+{
+  "mcpServers": {
+    "ctxlineage": { "command": "ctxlineage-mcp", "args": ["--dir", ".ctxlineage"] }
+  }
+}
+```
+
+Four tools, all read-only:
+
+| Tool | Returns |
+|---|---|
+| `list_sessions` | Recorded sessions + global stats (call/error counts, tag match rate); ids to feed the other tools, never prompt bodies |
+| `get_call` | One call's full anatomy — segments, usage, output, timing (long text truncated unless `full_content=true`) |
+| `get_lineage` | Lineage for one node id (a call or a context element): what it consumed, edges in/out, everything downstream it influenced |
+| `generate_report` | Builds the static HTML report (refuses to write inside the read-only event-log dir) |
+
 ## Principles
 
 - **Local-first, zero-server.** The artifact is one HTML file that opens
@@ -251,6 +290,9 @@ text — treat them like logs with sensitive data (see [SECURITY.md](SECURITY.md
 Before sharing, mask secrets with `ctxlineage report --redact "sk-[A-Za-z0-9]+"`
 (repeatable regex; the report discloses what was redacted), or keep them out of
 the log entirely with `ctxlineage.init(redact_fields=["request.messages.content"])`.
+Each `redact_fields` entry is a dotted path into the recorded event payload
+(`request.messages.content` masks the content of every recorded message); the
+matched values are replaced before anything is written to disk.
 
 ## Status
 
