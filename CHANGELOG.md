@@ -23,10 +23,10 @@ land in minor versions).
   the token estimate can exceed the provider's own reported count; the summary
   clamps the displayed coverage at 100% and drops the "the rest is the system
   prompt…" clause when there is no remainder to describe.
-- A corrupt or truncated byte in `events.jsonl` — a process killed mid-write
-  leaves one at EOF — no longer aborts every command with a raw
-  `UnicodeDecodeError`. The broken line is skipped and counted like any other
-  malformed line, and the rest of the log still renders.
+- A corrupt or truncated byte in `events.jsonl` (or an imported transcript) — a
+  process killed mid-write leaves one at EOF — no longer aborts every command
+  with a raw `UnicodeDecodeError`. The broken line is skipped and counted like
+  any other malformed line, and the rest of the log still renders.
 - `report --out path/into/a/missing/dir.html` now creates the parent directory
   instead of crashing with `FileNotFoundError` (same for the MCP
   `generate_report` tool).

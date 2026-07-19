@@ -58,10 +58,15 @@ _LABEL_MAX = 60
 
 
 def read_transcript(path: str | Path) -> tuple[list[dict], int]:
-    """Parse a transcript JSONL. Returns (records, skipped_line_count)."""
+    """Parse a transcript JSONL. Returns (records, skipped_line_count).
+
+    Read with ``errors="replace"`` for the same reason ``load_events`` does: a
+    corrupt or truncated byte in the agent's transcript degrades to a skipped
+    line, not a raw ``UnicodeDecodeError`` that aborts the whole import.
+    """
     records: list[dict] = []
     skipped = 0
-    for line in Path(path).read_text(encoding="utf-8").splitlines():
+    for line in Path(path).read_text(encoding="utf-8", errors="replace").splitlines():
         if not line.strip():
             continue
         try:

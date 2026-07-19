@@ -86,6 +86,18 @@ def test_report_hints_when_no_calls(tmp_path):
     assert "no LLM calls were recorded" in result.output
 
 
+def test_explicit_dir_overrides_ctxlineage_dir_env(demo_dir, tmp_path):
+    """Precedence must match init(): explicit --dir wins over the env var."""
+    out = tmp_path / "report.html"
+    result = CliRunner().invoke(
+        main,
+        ["report", "--dir", str(demo_dir), "--out", str(out)],
+        env={"CTXLINEAGE_DIR": str(tmp_path / "does_not_exist")},  # bad env, good flag
+    )
+    assert result.exit_code == 0, result.output
+    assert out.exists()
+
+
 def test_test_command_honors_ctxlineage_dir_env(demo_dir, tmp_path):
     config = tmp_path / "ctxlineage.toml"
     config.write_text("[[assert.window_budget]]\nmax_pct = 100\n")

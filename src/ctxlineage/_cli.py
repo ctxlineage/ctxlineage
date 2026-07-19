@@ -95,7 +95,7 @@ def report(
         # it should say why it is blank rather than leave the user guessing.
         click.echo(
             "Note: no LLM calls were recorded - did your app run under "
-            "ctxlineage.init()? (Check the --dir path if capture wrote elsewhere.)",
+            "ctxlineage.init()? (Check --dir / CTXLINEAGE_DIR if capture wrote elsewhere.)",
             err=True,
         )
     if open_browser:
