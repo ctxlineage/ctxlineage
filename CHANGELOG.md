@@ -23,6 +23,16 @@ land in minor versions).
   honour the `CTXLINEAGE_DIR` environment variable, the same way `init()`
   already does. A directory set once for capture no longer has to be repeated
   with `--dir` on every read (an explicit `--dir` still wins).
+- `pytest --ctxlineage` now reports how many tests produced a gateable LLM call
+  (e.g. `note: 0 of 34 test(s) produced a gateable LLM call (provider mocked?)`).
+  A suite that mocks its provider records no events, so the run is green because
+  nothing was gated — the note keeps that from reading as "context under budget"
+  (#82).
+- A `window_budget` with `segment=` that skips an imported call now names the
+  remedy in its skip message — native `ctxlineage.init()` capture, which an
+  import cannot reconstruct — instead of only stating the problem. The README
+  now frames it directly: use import to explore, native capture to gate segments
+  (#83).
 
 ### Fixed
 - A response that is already a plain `dict` — a raw-response wrapper, a mocked

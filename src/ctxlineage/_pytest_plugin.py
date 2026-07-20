@@ -145,6 +145,7 @@ class ContractPlugin:
         self._start = 0  # the current test's window start
         self._gaps: list[tuple[int, int]] = []  # ranges no test owns
         self._scopes: list[_Scope] = []
+        self._tests_run = 0  # call phases seen, to nudge when few produced calls
 
     def _size(self) -> int:
         try:
@@ -198,6 +199,7 @@ class ContractPlugin:
         return result
 
     def _close(self, item) -> list:
+        self._tests_run += 1
         end = self._size()
         events = self._read(self._start, end)
         self._cursor = max(self._cursor, end)
@@ -223,6 +225,7 @@ class ContractPlugin:
             # Not a pass: nothing was asserted, and saying otherwise here is the
             # same lie as a green gate over an empty capture.
             reporter.write_line("0 calls recorded - no assertion was evaluated.")
+            self._write_gateable_note(reporter)
             return
         for scope in self._scopes:
             if not scope.findings:
@@ -233,6 +236,24 @@ class ContractPlugin:
                     f"  {finding.severity.upper():<4}  {finding.rule}: {finding.message}"
                 )
         reporter.write_line(self._summary())
+        self._write_gateable_note(reporter)
+
+    def _write_gateable_note(self, reporter) -> None:
+        """Nudge when tests ran but few produced a call to gate.
+
+        A suite that mocks its LLM provider stubs the call site, so `init()`'s
+        patch never fires and no events are recorded — the run is green because
+        nothing was gated, not because the context was under budget. The plugin
+        can't know a call was intended, but it can say how many tests produced
+        one, so "green" is not mistaken for "gated" (#82).
+        """
+        gating = sum(1 for scope in self._scopes if scope.label != UNATTRIBUTED)
+        if not self._tests_run or gating >= self._tests_run:
+            return
+        note = f"note: {gating} of {self._tests_run} test(s) produced a gateable LLM call"
+        if gating == 0:
+            note += " (provider mocked? this plugin gates real calls)"
+        reporter.write_line(note)
 
     def _summary(self) -> str:
         findings = [f for scope in self._scopes for f in scope.findings]

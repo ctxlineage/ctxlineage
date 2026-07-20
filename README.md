@@ -201,6 +201,15 @@ capture alone. `ctxlineage test` is still the tool for a recorded run produced
 | `ctxlineage test` | the whole run | anywhere — a script, an example, an import |
 | `pytest --ctxlineage` | **the individual test** | the suite itself, as it runs |
 
+> **It gates _real_ LLM calls.** A suite that mocks its provider — the usual way
+> to keep tests deterministic and free — stubs the call site, so `init()`'s patch
+> never runs and there is nothing to record. The run is green because nothing was
+> gated, not because your context is under budget. The plugin says so —
+> `note: 0 of N test(s) produced a gateable LLM call (provider mocked? this
+> plugin gates real calls)` — rather than passing in silence. To actually gate,
+> add one test that makes a real call (a nano model, well under a cent), or run
+> `ctxlineage test` / `ctxlineage import` over a recorded run.
+
 ## Importing coding-agent sessions (`ctxlineage import`)
 
 Claude Code and `claude -p` are separate, non-Python processes, so
@@ -239,6 +248,14 @@ system prompt and tool definitions alone can be tens of thousands of tokens.
 `ctxlineage import` prints the coverage it achieved, and the unaccounted
 remainder is recorded per call. Live capture via `ctxlineage.init()` remains the
 complete picture; import is the bridge to processes you cannot patch.
+
+**What this means for `ctxlineage test`.** Segment-level contracts need *exact*
+segments, so they gate only on native `init()` capture — not on an import, where
+`segments_complete` is `false`. A `window_budget` with `segment=` **skips**
+imported calls (and says why, naming native capture as the fix) rather than
+scoring a fraction as the whole. The whole-prompt `window_budget` still gates an
+import, because it reads the provider's own `usage`. So: **use import to explore
+the anatomy and the whole-prompt budget; use native capture to gate segments.**
 
 ## Querying the report from an agent (MCP server)
 
