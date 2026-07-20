@@ -204,11 +204,11 @@ capture alone. `ctxlineage test` is still the tool for a recorded run produced
 > **It gates _real_ LLM calls.** A suite that mocks its provider — the usual way
 > to keep tests deterministic and free — stubs the call site, so `init()`'s patch
 > never runs and there is nothing to record. The run is green because nothing was
-> gated, not because your context is under budget. The plugin says so
-> (`note: 0 of N test(s) produced a gateable LLM call (provider mocked?)`) rather
-> than passing in silence. To actually gate, add one test that makes a real call
-> (a nano model, well under a cent), or run `ctxlineage test` / `ctxlineage
-> import` over a recorded run.
+> gated, not because your context is under budget. The plugin says so —
+> `note: 0 of N test(s) produced a gateable LLM call (provider mocked? this
+> plugin gates real calls)` — rather than passing in silence. To actually gate,
+> add one test that makes a real call (a nano model, well under a cent), or run
+> `ctxlineage test` / `ctxlineage import` over a recorded run.
 
 ## Importing coding-agent sessions (`ctxlineage import`)
 
