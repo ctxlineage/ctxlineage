@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ctxlineage: a local-first Python library that records every LLM call (OpenAI / Anthropic SDKs, auto-instrumented via monkey-patch) to an append-only `.ctxlineage/events.jsonl`, then renders a **single static HTML report** (Call Anatomy + Lineage Graph views). Zero server, zero DB, no external data transmission — ever.
 
-**Current state: v0.1.0 released; v0.2 work merged on `main` but NOT yet released** (`pip install ctxlineage` still gives 0.1.0). M1–M4 shipped: capture (openai + anthropic, sync/async/streaming), the four-view report, the span/tag lineage pipeline, the MCP server, redaction, and runnable examples. On top of that, unreleased: `ctxlineage test` — deterministic context contracts, `_contract/` (#14, first slice only) — and `ctxlineage import --from claude-code`, `_import/` (#57). Build/test: `uv sync --all-extras`, `uv run pytest`, `uv run ruff check . && uv run ruff format .`.
+**Current state: v0.2.x (0.2.0 on PyPI; 0.2.1 is a maintenance release).** M1–M4 shipped: capture (openai + anthropic, sync/async/streaming), the four-view report, the span/tag lineage pipeline, the MCP server, redaction, and runnable examples. On top of that: `ctxlineage test` — deterministic context contracts, `_contract/` (#14, first slice only) — and `ctxlineage import --from claude-code`, `_import/` (#57), plus a pytest plugin (`pytest --ctxlineage`). Build/test: `uv sync --all-extras`, `uv run pytest`, `uv run ruff check . && uv run ruff format .`.
 
 ## Required workflow
 

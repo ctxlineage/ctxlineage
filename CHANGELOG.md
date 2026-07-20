@@ -7,6 +7,11 @@ land in minor versions).
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-07-20
+
+Maintenance: honesty and robustness fixes found putting v0.2.0 through a real
+run, plus a few more model context windows. No API changes.
+
 ### Added
 - Context windows for more well-known OpenAI models: `gpt-4-turbo` (128k),
   `gpt-4-32k` (32k) and the `o1` family (200k, with `o1-mini` / `o1-preview` at
@@ -54,6 +59,10 @@ land in minor versions).
 - `report` over a log with no recorded calls now prints why it is empty
   (capture not wired up, or the wrong `--dir`) instead of silently writing a
   blank report.
+- `ctxlineage.__version__` now reflects the installed package version instead of
+  a stale hardcoded `0.0.1.dev0`. It is derived from the package metadata, so it
+  can no longer drift from what `pip install` gives. (`ctxlineage --version` was
+  always correct; only the attribute lagged.)
 
 ## [0.2.0] - 2026-07-18
 
