@@ -313,7 +313,7 @@ matched values are replaced before anything is written to disk.
 
 ## Status
 
-**v0.2.0** — the capture layer (openai + anthropic), the four-view report, the
+**v0.2.1** — the capture layer (openai + anthropic), the four-view report, the
 span/tag lineage pipeline, the read-only MCP server, and runnable examples, plus:
 
 - **`ctxlineage test`** — deterministic context contracts (`window_budget`,
