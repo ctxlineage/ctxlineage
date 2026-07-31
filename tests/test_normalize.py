@@ -896,6 +896,32 @@ def test_anthropic_thinking_blocks_visibly_marked():
     assert "[redacted thinking]" in output["content"]
 
 
+def test_empty_thinking_block_leaves_no_placeholder():
+    # #90: an imported transcript strips reasoning text but keeps the block
+    # shape (thinking=""). A per-occurrence "[thinking: 0 chars not shown]"
+    # conveys nothing that isn't already counted once, elsewhere
+    # (import.reasoning_blocks_stripped) - it should not print at all. A
+    # block with real (but hidden-by-policy) content still gets its marker.
+    payload = _anthropic_payload(
+        {"messages": [{"role": "user", "content": "hi"}]},
+        response={
+            "id": "msg1",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-sonnet-5",
+            "content": [
+                {"type": "thinking", "thinking": "", "signature": "s"},
+                {"type": "text", "text": "the final answer"},
+            ],
+            "stop_reason": "end_turn",
+        },
+    )
+    output = normalize.build_report_data([_event(payload)])["sessions"][0]["calls"][0]["output"]
+    assert "the final answer" in output["content"]
+    assert "chars not shown" not in output["content"]
+    assert "thinking" not in output["content"]
+
+
 def test_anthropic_assembled_indices_sort_numerically():
     # capture stringifies block indices; ten-plus blocks must not join in
     # lexicographic order ("10" before "2").

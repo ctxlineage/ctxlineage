@@ -106,8 +106,13 @@ def _part_text(part: dict) -> str:
         # content is a string or a nested block list (recurse to flatten it)
         return _content_to_text(part.get("content"))
     if ptype == "thinking":
-        # visible marker, not the (potentially huge) reasoning text itself
-        return f"[thinking: {len(part.get('thinking') or '')} chars not shown]"
+        # visible marker, not the (potentially huge) reasoning text itself.
+        # A zero-length block (an imported transcript strips the text but keeps
+        # the block) has nothing to mark - it would print an identical, useless
+        # placeholder on every output; that count is already surfaced once, in
+        # the provenance panel's `reasoning_blocks_stripped`.
+        length = len(part.get("thinking") or "")
+        return f"[thinking: {length} chars not shown]" if length else ""
     if ptype == "redacted_thinking":
         return "[redacted thinking]"
     return part.get("text") or part.get("input_text") or ""

@@ -19,6 +19,27 @@ land in minor versions).
   `window_budget`'s segment form already uses — absence there is ambiguous
   between "never sent" and "not preserved by the transcript") (#94).
 
+### Fixed
+- The Graph view no longer renders a mostly-blank three-column layout on a
+  session with no tagged elements — a **default experience for every v0.2.x
+  user who hasn't adopted `span()`/`tag()`**, not an import-only artifact.
+  The SOURCES/CONTEXT ELEMENTS columns collapse and the call column uses the
+  full width; the banner is reworded for the general untagged case, with an
+  honest, non-actionable variant for imported sessions (tagging is
+  structurally impossible there) (#89).
+- Segment shares on an imported call — where recovery can be well under 1%
+  of the real prompt — now show a second, explicitly-labelled basis (`X tok
+  · Y% of prompt · Z% of recovered`) alongside the existing real-prompt
+  share, so a segment that rounds to "0% of prompt" isn't the only number on
+  the page. Shown only when the two bases differ; live capture is unchanged
+  (#90).
+- A `[thinking: 0 chars not shown]` placeholder — printed once per stripped
+  reasoning block, even when the transcript kept none of its text — no
+  longer repeats itself across every output on an imported call; the
+  stripped-block count is already shown once, in the provenance panel. A
+  block with real, policy-hidden content (native capture) keeps its marker
+  (#90).
+
 ## [0.2.1] - 2026-07-20
 
 Maintenance: honesty and robustness fixes found putting v0.2.0 through a real
