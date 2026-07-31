@@ -132,3 +132,49 @@ output ordering:
 - `docs/vision/context-contract-testing.md` §8 gets a one-line note marking
   regression/differential as shipped, since this was the doc's own
   "natural first deliverable" call-out.
+
+## 7. Adversarial review, pre-merge: two real issues found and fixed
+
+Given this PR's novel cross-run pairing logic (no prior art elsewhere in
+the codebase), it got a dedicated adversarial review after the PR opened.
+It found one real bug and one real gap, both fixed (full suite now
+**488 passed**, lint clean):
+
+- **Bug — the baseline-orphan WARN cited the wrong session.**
+  `_check_session`'s second loop (baseline calls with no current-side
+  counterpart) built its message with `_locate(session, orphan)` — pairing
+  the *current* session's id with a *baseline* call's id. Session and call
+  ids are independent per-run UUIDs, so the resulting message named a call
+  that provably does not exist under that session anywhere in the current
+  run. Every existing fixture hardcoded `session="s1"` on both sides, which
+  made the bug structurally invisible to the test suite. Fixed to
+  `_locate(baseline_session, orphan)`; added
+  `test_segment_diff_baseline_orphan_names_the_baseline_session_not_current`
+  with deliberately distinct session ids on each side to pin it.
+- **Gap — no typo/never-matched protection, unlike `window_budget`.**
+  `WindowBudget` warns when a configured `segment` never appears in any
+  evaluated call, guarding against a typo reading as a false pass.
+  `SegmentDiff` had no analog: a misspelled `segment` sums to `0` on both
+  sides for every pair forever, so `delta` is always `0` and the rule
+  silently, permanently passes — indistinguishable from "genuinely never
+  grew." Added the same guard: `check()` now tracks whether any pair was
+  actually evaluated (not skipped) and, if `segment` is set and evaluated
+  but never once appeared in either run's data, emits a WARN naming the
+  configured value. Mirrors `WindowBudget`'s own `evaluated_any`/
+  `segment_seen` pattern. Two new tests:
+  `test_segment_diff_warns_when_the_segment_never_appears_on_either_side`
+  and `test_segment_diff_does_not_claim_the_segment_is_missing_when_nothing_was_evaluated`
+  (the latter mirrors `WindowBudget`'s own
+  `test_unknown_window_does_not_claim_the_segment_is_missing` — don't warn
+  about a typo when absence was never established because everything was
+  skipped).
+- **Documented, not code-fixed — positional session pairing's silent
+  failure mode.** If session *counts* match but *identities* differ (a new
+  session type inserted ahead of an old one, same-second sessions
+  reordering under timestamp jitter), the diff compares unrelated sessions
+  with **no warning at all** — worse than the count-mismatch and per-call
+  pairing-gap cases, which do surface. There's no cross-run session
+  identity to detect this against without inventing one (out of scope for
+  this slice), so it's called out explicitly in the `SegmentDiff` docstring
+  and the README instead of silently relying on the reader to infer it from
+  "positional pairing."

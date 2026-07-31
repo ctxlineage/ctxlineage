@@ -138,7 +138,12 @@ skipped or warned — never silently passed.
 order, then by span name within a session — since there is no other stable
 identity to match on. A call whose pairing can't be found (the pipeline's
 shape changed since the baseline was recorded) warns rather than fails: a
-missing counterpart is not itself a content regression.
+missing counterpart is not itself a content regression. Positional session
+pairing only warns when session **counts** differ; if counts match but a
+session's identity has quietly changed (a new session type inserted ahead
+of an old one, same-second sessions reordering), the diff compares
+unrelated sessions with no warning — a baseline is only trustworthy against
+a pipeline whose session shape hasn't changed since it was recorded.
 
 ### Try it in 30 seconds (no API key)
 

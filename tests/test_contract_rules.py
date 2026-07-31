@@ -634,6 +634,65 @@ def test_segment_diff_warns_when_a_step_only_exists_in_baseline():
     assert "b1" in findings[0].message
 
 
+def test_segment_diff_baseline_orphan_names_the_baseline_session_not_current():
+    """Regression: the orphan-in-baseline-only warning must cite the
+    baseline call's own session, not the current session it's positionally
+    paired against - the two runs' session ids are independent per-run
+    UUIDs in practice, so naming the wrong one points at a call that
+    provably does not exist under that session in this run."""
+    baseline = _data(
+        _llm_call(
+            "b0",
+            session="baseline-session",
+            messages=[{"role": "user", "content": "hi"}],
+            ts="2026-07-17T00:00:00+00:00",
+        ),
+        _span_start("sp1", "retired_step", session="baseline-session"),
+        _llm_call(
+            "b1",
+            session="baseline-session",
+            span="sp1",
+            messages=[{"role": "user", "content": "hi"}],
+            ts="2026-07-17T00:01:00+00:00",
+        ),
+    )
+    current = _data(
+        _llm_call("c0", session="current-session", messages=[{"role": "user", "content": "hi"}])
+    )
+    rule = SegmentDiff(baseline_data=baseline, max_token_delta=1000, segment="user")
+    findings = runner.run(current, [rule])
+    assert len(findings) == 1
+    assert "baseline-session" in findings[0].message
+    assert "current-session" not in findings[0].message
+
+
+def test_segment_diff_warns_when_the_segment_never_appears_on_either_side():
+    """Mirrors WindowBudget's typo guard: without this, a misspelled segment
+    kind sums to 0 on both sides for every pair forever, and the rule passes
+    silently - indistinguishable, by the math alone, from 'genuinely never
+    grew'."""
+    baseline = _data(_llm_call("b1", messages=[{"role": "user", "content": "hi"}]))
+    current = _data(_llm_call("c1", messages=[{"role": "user", "content": "hi"}]))
+    rule = SegmentDiff(baseline_data=baseline, max_token_delta=0, segment="toll_defs")
+    findings = runner.run(current, [rule])
+    assert len(findings) == 1
+    assert findings[0].severity == "warn"
+    assert "toll_defs" in findings[0].message
+    assert "never appeared" in findings[0].message
+
+
+def test_segment_diff_does_not_claim_the_segment_is_missing_when_nothing_was_evaluated():
+    """When every pair was skipped (incomplete on both sides), the segment's
+    absence was never established - telling the user to check the name
+    sends them after a typo that may not be there."""
+    baseline = _data(_imported_call("b1", messages=[{"role": "user", "content": "hi"}]))
+    current = _data(_imported_call("c1", messages=[{"role": "user", "content": "hi"}]))
+    rule = SegmentDiff(baseline_data=baseline, max_token_delta=0, segment="toll_defs")
+    findings = runner.run(current, [rule])
+    assert _sev(findings, "skip")
+    assert "never appeared" not in _messages(findings)
+
+
 def test_segment_diff_pairs_repeated_steps_by_occurrence_order():
     """An agent loop's calls all share one span - pairing must match the Kth
     occurrence to the Kth occurrence, not collapse them into one comparison."""
