@@ -82,3 +82,38 @@ unit-level DOM assertions alone — logged as
   chevron rotating, the output panel's unbounded expand, and — the important
   negative check — that expanding a nested branch does **not** collapse the
   segment or output panel around it.
+
+## 6. Adversarial review, pre-merge: one real crash bug found and fixed
+
+- **Major — unbounded recursion in `jsonTreeHtml` crashed the whole Calls
+  view on deeply-nested JSON.** `parseJsonMaybe` only guards against
+  `JSON.parse` itself throwing; it can't predict that the subsequent pure-JS
+  tree walk has no depth cap. A JSON value nested ~2000+ levels deep (a
+  plausible shape for a hostile RAG chunk, or a legitimate deeply-nested
+  tool trace) threw `Maximum call stack size exceeded` mid-template-literal
+  construction inside `renderCallDetail()` — `main.innerHTML` never got
+  reassigned, so `#main` was left showing the stale Overview HTML with no
+  visible error, and the Calls tab was silently broken for that report
+  load. Confirmed the crash reproduces by temporarily reverting the fix and
+  re-running the new regression test: it timed out waiting for `.windowbar`
+  to ever appear (30s), matching the reviewer's description exactly.
+  Fixed by adding `JSON_TREE_MAX_DEPTH = 24` (far above any realistic
+  payload's real nesting) — past that depth, a branch renders a `not
+  expanded further` marker instead of recursing, so the walk always
+  terminates. New regression test
+  `test_a_deeply_nested_json_segment_does_not_crash_the_calls_view` pins
+  this at depth 3000, and independently proves the fix is load-bearing (not
+  just present) by reproducing the pre-fix crash locally before landing.
+- **Minor, fixed** — `toggleOpen`'s nested-`<details>` guard was inert at
+  the `#instr` call site (missing the `event` argument that `.seg`/
+  `#outwrap` correctly pass). Not exploitable today since `.instr .txt` is
+  never JSON-tree-rendered, but it was a landmine: the exact bug this PR
+  fixed for segments/output would have silently reappeared the moment JSON
+  rendering extends to the INSTRUCTIONS panel. Fixed by passing the event
+  through at that call site too, matching the other two.
+- **Nit, not fixed** — click-to-close behavior differs slightly depending
+  on whether a JSON leaf row sits inside an already-expanded branch or not
+  (both non-crashing, just inconsistent); left as-is, not worth the
+  complexity for a cosmetic edge case.
+
+Full suite after fixes: **470 passed**, lint clean.

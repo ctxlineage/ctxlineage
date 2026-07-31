@@ -51,14 +51,24 @@ const jsonLeafText = (v) => {
   if (typeof v !== "string") return String(v);
   return v.length > 60 ? `"${clip(v, 60)}…"` : `"${v}"`;
 };
-const jsonTreeHtml = (value) => {
+// A parsed value can nest arbitrarily deep (a hostile or just very large RAG
+// chunk, a deeply nested tool-call trace) - JSON.parse succeeding says
+// nothing about whether the walk below can afford to recurse that deep.
+// Found by adversarial review: an ~2000-level-deep array blew the call stack
+// mid-render, leaving #main showing stale content with no visible error.
+// This cap is far above any realistic payload's real nesting.
+const JSON_TREE_MAX_DEPTH = 24;
+const jsonTreeHtml = (value, depth = 0) => {
   const entries = Array.isArray(value) ? value.map((v, i) => [String(i), v]) : Object.entries(value);
   if (!entries.length) return `<div class="jempty">${Array.isArray(value) ? "[]" : "{}"}</div>`;
+  if (depth >= JSON_TREE_MAX_DEPTH) {
+    return `<div class="jempty">nested deeper than ${JSON_TREE_MAX_DEPTH} levels, not expanded further</div>`;
+  }
   return `<div class="jchildren">${entries.map(([k, v]) => {
     const branch = v !== null && typeof v === "object";
     const kv = `<span class="jkey">${esc(k)}</span>: <span class="jval">${esc(branch ? jsonKind(v) : jsonLeafText(v))}</span>`;
     return branch
-      ? `<details class="jrow jbranch"><summary>${kv}</summary>${jsonTreeHtml(v)}</details>`
+      ? `<details class="jrow jbranch"><summary>${kv}</summary>${jsonTreeHtml(v, depth + 1)}</details>`
       : `<div class="jrow">${kv}</div>`;
   }).join("")}</div>`;
 };
@@ -384,7 +394,7 @@ function renderCallDetail() {
   main.querySelectorAll(".seg").forEach((el) =>
     el.addEventListener("click", (e) => toggleOpen(el, ".full", e)));
   const instrEl = document.getElementById("instr");
-  if (instrEl) instrEl.addEventListener("click", () => toggleOpen(instrEl, ".txt"));
+  if (instrEl) instrEl.addEventListener("click", (e) => toggleOpen(instrEl, ".txt", e));
   const outEl = document.getElementById("outwrap");
   if (outEl) outEl.addEventListener("click", (e) => toggleOpen(outEl, ".body", e));
 }

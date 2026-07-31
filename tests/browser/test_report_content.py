@@ -261,3 +261,63 @@ def test_json_tree_escapes_a_hostile_key_and_value(open_report, render_events, c
     # the payload still renders as literal text, both as the key and the value
     text = page.locator(".col .seg.open .full").inner_text()
     assert text.count(JSON_PAYLOAD_HOSTILE) == 2
+
+
+# ---------------- unbounded recursion is its own crash surface -------------
+
+
+def _deeply_nested_json_events(depth: int) -> list[dict]:
+    """A JSON.parse'able array nested `depth` levels deep - JSON.parse succeeding
+    says nothing about whether the tree-rendering walk can afford to recurse
+    that deep. Found by adversarial review: ~2000 levels blew the call stack
+    mid-render, leaving #main showing stale content with no visible error."""
+    nested = "[" * depth + "1" + "]" * depth
+    return [
+        _event(
+            "llm_call",
+            "session-deep-json",
+            {
+                "provider": "openai",
+                "api": "chat.completions",
+                "request": {
+                    "model": "gpt-4o-mini",
+                    "messages": [{"role": "user", "content": nested}],
+                },
+                "response": {
+                    "choices": [
+                        {"message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}
+                    ],
+                    "usage": {"prompt_tokens": 4, "completion_tokens": 1, "total_tokens": 5},
+                },
+                "usage": {"prompt_tokens": 4, "completion_tokens": 1, "total_tokens": 5},
+                "stream": False,
+                "duration_ms": 5.0,
+                "call_stack": [],
+            },
+            call_id="c1",
+        )
+    ]
+
+
+def test_a_deeply_nested_json_segment_does_not_crash_the_calls_view(
+    open_report, render_events, console_errors
+):
+    report = render_events(_deeply_nested_json_events(depth=3000))
+    page = open_calls_view(open_report, report)
+    page.click(".col .seg:not(.unaccounted-seg)")  # open, forcing the tree to render
+    page.wait_for_timeout(100)
+
+    assert not console_errors
+    # the crash left #main showing the stale Overview - proving the windowbar
+    # (Calls-view-only chrome) is present proves rendering ran to completion.
+    assert page.locator(".windowbar").count() == 1
+    # one .jchildren per nesting level rendered up to the depth cap - proves
+    # the walk actually recursed (not just "rendered nothing"), not that it
+    # rendered exactly one level.
+    assert page.locator(".col .seg.open .full .jchildren").count() >= 1
+    # the depth cap surfaces as a truncation marker, rather than silently
+    # rendering forever or silently stopping with no trace at all - the
+    # marker sits inside collapsed <details> ancestors, so this reads
+    # textContent (unaffected by native disclosure visibility) rather than
+    # inner_text (which only sees what's currently rendered visible).
+    assert "not expanded further" in page.locator(".col .seg.open .full").text_content()
