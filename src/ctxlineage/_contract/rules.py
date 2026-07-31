@@ -1,12 +1,15 @@
 """The built-in relations.
 
 A *handful* of built-in rules is the whole scope (§12) — this is not a
-framework, and the two here are deliberately small pure readers of
+framework, and these are deliberately small pure readers of
 `build_report_data` output.
 
 Each rule declares the tier it can reach (§6) and the runner never overrides it:
 
 - `window_budget` is deterministic from capture alone → hard-gates untagged.
+- `requires_segment` is likewise deterministic from capture alone → hard-gates
+  untagged, always (unlike `window_budget`, absence is never demoted to a
+  warning: "required" means the absence itself is the failure).
 - `grounded` gates only where a `tag()` made the lineage exact, and demotes to
   advisory otherwise.
 """
@@ -14,6 +17,7 @@ Each rule declares the tier it can reach (§6) and the runner never overrides it
 from __future__ import annotations
 
 from dataclasses import dataclass
+from fnmatch import fnmatch
 
 from ctxlineage._contract.runner import FAIL, SKIP, WARN, Finding
 from ctxlineage._report.normalize import _PROMPT_BEARING
@@ -25,6 +29,22 @@ KNOWN_SEGMENT_KINDS = ("system", "user", "assistant", "tool", "tool_defs")
 
 def _locate(session: dict, call: dict) -> str:
     return f"session {session['id']}, call {call['id']}"
+
+
+def _incomplete_reason(call: dict) -> str:
+    """Name what the producer said it could not recover, for a skip reason.
+
+    Shared by any rule that reads segments and must not treat
+    `segments_complete=False` as measurable: an absence there is ambiguous
+    between "never sent" and "not preserved by the transcript", which is
+    exactly the distinction a skip (not a pass or a fail) exists to avoid
+    collapsing.
+    """
+    meta = call.get("import") if isinstance(call.get("import"), dict) else {}
+    missing = [p for p in (meta.get("not_preserved") or ()) if p in _PROMPT_BEARING]
+    source = meta.get("source")
+    origin = f"imported from {source}" if source else "reconstructed"
+    return f"{origin}; not preserved: {', '.join(missing)}" if missing else origin
 
 
 @dataclass(frozen=True)
@@ -69,7 +89,7 @@ class WindowBudget:
                             self.NAME,
                             SKIP,
                             f"{_locate(session, call)}: {self._subject()} not evaluated - "
-                            f"{unmeasurable} ({self._missing(call)})",
+                            f"{unmeasurable} ({_incomplete_reason(call)})",
                         )
                     )
                     continue
@@ -137,14 +157,6 @@ class WindowBudget:
                 "reported, so the only number available is an estimate over a fraction of it"
             )
         return None
-
-    def _missing(self, call: dict) -> str:
-        """Name what the producer said it could not recover, for the skip reason."""
-        meta = call.get("import") if isinstance(call.get("import"), dict) else {}
-        missing = [p for p in (meta.get("not_preserved") or ()) if p in _PROMPT_BEARING]
-        source = meta.get("source")
-        origin = f"imported from {source}" if source else "reconstructed"
-        return f"{origin}; not preserved: {', '.join(missing)}" if missing else origin
 
     @staticmethod
     def _reported_prompt(call: dict) -> int | None:
@@ -260,3 +272,65 @@ class Grounded:
             f"downstream call used their output - possible dead context "
             f"[advisory: lineage edges are inferred]",
         )
+
+
+@dataclass(frozen=True)
+class RequiresSegment:
+    """Assert every call carries a segment of a given kind - the structural
+    counterpart to `window_budget`'s cap: not *how much* is in the window,
+    but whether the right thing is there at all (§8's "required-segment
+    presence"). Optionally scoped to models matching `when_model` (a glob).
+
+    Deterministic from capture alone, so it hard-gates untagged like
+    `window_budget` - but unlike it, absence is never demoted to a warning.
+    `window_budget`'s warn-on-absence guards against a typo'd segment name
+    reading as a false failure; here the rule's whole point is that absence
+    *is* the failure, so a typo surfaces loudly (the correct signal) rather
+    than being softened.
+    """
+
+    kind: str
+    when_model: str | None = None
+
+    NAME = "requires_segment"
+
+    def check(self, data: dict) -> list[Finding]:
+        findings: list[Finding] = []
+        for session in data["sessions"]:
+            for call in session["calls"]:
+                if self.when_model:
+                    model = call.get("model")
+                    if model is None:
+                        findings.append(
+                            Finding(
+                                self.NAME,
+                                SKIP,
+                                f"{_locate(session, call)}: model unknown, cannot match against "
+                                f"when_model {self.when_model!r} - not evaluated",
+                            )
+                        )
+                        continue
+                    if not fnmatch(model, self.when_model):
+                        continue  # out of scope for this rule, not a gap - no finding
+                if not call.get("segments_complete", True):
+                    # Absent here is ambiguous between "never sent" and "not
+                    # preserved by the transcript" - the same reasoning
+                    # WindowBudget's segment form skips on (#63).
+                    findings.append(
+                        Finding(
+                            self.NAME,
+                            SKIP,
+                            f"{_locate(session, call)}: segment {self.kind!r} presence not "
+                            f"evaluated - absence would be ambiguous ({_incomplete_reason(call)})",
+                        )
+                    )
+                    continue
+                if not any(s.get("kind") == self.kind for s in call["segments"]):
+                    findings.append(
+                        Finding(
+                            self.NAME,
+                            FAIL,
+                            f"{_locate(session, call)}: required segment {self.kind!r} is absent",
+                        )
+                    )
+        return findings

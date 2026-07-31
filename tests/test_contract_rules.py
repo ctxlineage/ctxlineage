@@ -9,7 +9,7 @@ break if that shape drifts.
 from __future__ import annotations
 
 from ctxlineage._contract import runner
-from ctxlineage._contract.rules import Grounded, WindowBudget
+from ctxlineage._contract.rules import Grounded, RequiresSegment, WindowBudget
 from ctxlineage._report import normalize
 
 CHUNK = "ALPHA-CHUNK-CONTENT-ONE: ctxlineage records every call locally."
@@ -439,6 +439,92 @@ def test_unmatched_tag_reports_presence_only_not_dead_context():
     findings = runner.run(data, [Grounded(tag="rag_chunks", warn_dead=True)])
     assert len(findings) == 1
     assert findings[0].severity == "fail"
+
+
+# --------------------------------------------------------------------------
+# requires_segment — structural presence, deterministic, hard-gates untagged
+# --------------------------------------------------------------------------
+
+
+def test_requires_segment_passes_when_present():
+    data = _data(
+        _llm_call(
+            "c1",
+            messages=[
+                {"role": "system", "content": "Be terse."},
+                {"role": "user", "content": "hi"},
+            ],
+            usage={"prompt_tokens": 10},
+        )
+    )
+    assert runner.run(data, [RequiresSegment(kind="system")]) == []
+
+
+def test_requires_segment_hard_fails_when_absent():
+    """Unlike window_budget's typo guard, absence here is never demoted - it
+    is the whole point of the rule, so a typo'd kind fails loudly."""
+    data = _data(
+        _llm_call("c1", messages=[{"role": "user", "content": "hi"}], usage={"prompt_tokens": 10})
+    )
+    findings = runner.run(data, [RequiresSegment(kind="system")])
+    assert len(findings) == 1
+    assert findings[0].severity == "fail"
+    assert "system" in findings[0].message
+
+
+def test_requires_segment_skips_incomplete_imports_rather_than_failing():
+    """#63's reasoning, reused: an imported call's absent segment is ambiguous
+    between 'never sent' and 'not preserved' - failing it would punish the
+    transcript's honesty about what it could not recover, not a real gap."""
+    data = _data(
+        _imported_call(
+            "c1", messages=[{"role": "user", "content": "hi"}], usage={"prompt_tokens": 30_000}
+        )
+    )
+    findings = runner.run(data, [RequiresSegment(kind="system")])
+    assert len(findings) == 1
+    assert findings[0].severity == "skip"
+    assert "ambiguous" in findings[0].message
+
+
+def test_requires_segment_when_model_scopes_to_matching_calls_only():
+    data = _data(
+        _llm_call(
+            "c1", model="gpt-4o-mini", messages=[{"role": "user", "content": "hi"}], usage={}
+        ),
+        _llm_call(
+            "c2", model="claude-sonnet-5", messages=[{"role": "user", "content": "hi"}], usage={}
+        ),
+    )
+    findings = runner.run(data, [RequiresSegment(kind="tool_defs", when_model="gpt-*")])
+    assert len(findings) == 1
+    assert "c1" in findings[0].message
+    assert "c2" not in findings[0].message
+
+
+def test_requires_segment_when_model_no_match_is_silent_not_skipped():
+    """A call outside when_model's scope is not a gap - the rule simply does
+    not apply to it, so it gets no finding at all (skip is reserved for
+    'could not evaluate', not 'was never in scope')."""
+    data = _data(
+        _llm_call(
+            "c1", model="claude-sonnet-5", messages=[{"role": "user", "content": "hi"}], usage={}
+        )
+    )
+    assert runner.run(data, [RequiresSegment(kind="tool_defs", when_model="gpt-*")]) == []
+
+
+def test_requires_segment_when_model_unknown_model_is_skipped():
+    """A call whose model is genuinely unknown cannot be matched against
+    when_model at all - that IS a gap, unlike a known model that simply
+    doesn't match, so it gets an explicit skip rather than silent exclusion."""
+    event = _llm_call("c1", messages=[{"role": "user", "content": "hi"}], usage={})
+    event["payload"]["request"]["model"] = None
+    data = _data(event)
+    findings = runner.run(data, [RequiresSegment(kind="tool_defs", when_model="gpt-*")])
+    assert len(findings) == 1
+    assert findings[0].severity == "skip"
+    assert "model unknown" in findings[0].message
 
 
 # --------------------------------------------------------------------------

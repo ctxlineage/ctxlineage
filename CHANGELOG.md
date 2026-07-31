@@ -7,6 +7,18 @@ land in minor versions).
 
 ## [Unreleased]
 
+### Added
+- **`requires_segment`** — a new `ctxlineage test` rule asserting every call
+  (optionally scoped to models matching `when_model`, a glob) carries a
+  segment of a given kind. The structural counterpart to `window_budget`:
+  not *how much* is in the window, but *whether the right thing is there at
+  all*. Deterministic from capture alone, no tagging needed, hard-gates like
+  `window_budget` — but unlike it, absence is never demoted to a warning,
+  since here absence *is* the failure. An imported call whose segments are
+  declared partial skips rather than fails (the same #63 reasoning
+  `window_budget`'s segment form already uses — absence there is ambiguous
+  between "never sent" and "not preserved by the transcript") (#94).
+
 ## [0.2.1] - 2026-07-20
 
 Maintenance: honesty and robustness fixes found putting v0.2.0 through a real

@@ -254,7 +254,7 @@ def test_reference_config_gates_the_rag_exemplar(tmp_path):
     assert result.exit_code == 0, (
         f"the shipped config must pass the shipped example:\n{result.output}"
     )
-    assert "3 assertion(s)" in result.output
+    assert "4 assertion(s)" in result.output
     # grounded gates on the tag, so a silent pass here means rag_chunks really
     # landed in the window — not that the rule was skipped for want of evidence
     assert "SKIP" not in result.output

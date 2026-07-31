@@ -21,7 +21,7 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-from ctxlineage._contract.rules import Grounded, WindowBudget
+from ctxlineage._contract.rules import Grounded, RequiresSegment, WindowBudget
 
 if sys.version_info >= (3, 11):
     import tomllib
@@ -129,9 +129,19 @@ def _parse_grounded(entry: dict, where: str) -> Grounded:
     return Grounded(tag=tag, warn_dead=warn_dead)
 
 
+def _parse_requires_segment(entry: dict, where: str) -> RequiresSegment:
+    _reject_unknown(entry, {"kind", "when_model"}, where)
+    if "kind" not in entry:
+        raise ConfigError(f"{where}: kind is required")
+    kind = _string(entry, "kind", where)
+    when_model = _string(entry, "when_model", where) if "when_model" in entry else None
+    return RequiresSegment(kind=kind, when_model=when_model)
+
+
 # Built-in relations only. A plugin hook (§12) would register here; nothing
 # third-party loads in this slice.
 _PARSERS = {
     WindowBudget.NAME: _parse_window_budget,
     Grounded.NAME: _parse_grounded,
+    RequiresSegment.NAME: _parse_requires_segment,
 }
