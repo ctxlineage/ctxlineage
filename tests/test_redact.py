@@ -124,6 +124,54 @@ def test_apply_masks_all_text_carriers():
     assert element["transform"] == "filter([redacted])"
 
 
+def test_apply_masks_declared_structure():
+    # #103 gave segments and outputs a `structured` field carrying a tool
+    # call's own arguments. It is the same text as the flattened `content`,
+    # so an unwalked field would hand back verbatim what the mask removed one
+    # field over - and a tool argument is exactly where a key gets passed.
+    data = {
+        "sessions": [
+            {
+                "calls": [
+                    {
+                        "segments": [
+                            {
+                                "content": f"[tool_use: Fetch({{'token': '{SECRET}'}})]",
+                                "structured": [
+                                    {
+                                        "kind": "tool_call",
+                                        "name": "Fetch",
+                                        "value": {"token": SECRET, "nested": [{"k": SECRET}]},
+                                    }
+                                ],
+                            }
+                        ],
+                        "output": {
+                            "content": SECRET,
+                            "structured": [
+                                {"kind": "tool_call", "name": SECRET, "value": {"q": SECRET}}
+                            ],
+                        },
+                    }
+                ]
+            }
+        ]
+    }
+    count = redact.apply(data, [re.escape(SECRET)])
+
+    assert count > 0
+    assert SECRET not in json.dumps(data)
+    call = data["sessions"][0]["calls"][0]
+    part = call["segments"][0]["structured"][0]
+    assert part["value"]["token"] == "[redacted]"
+    assert part["value"]["nested"][0]["k"] == "[redacted]"
+    assert part["kind"] == "tool_call"  # structural fields are never touched
+    assert part["name"] == "Fetch"
+    out = call["output"]["structured"][0]
+    assert out["name"] == "[redacted]"
+    assert out["value"]["q"] == "[redacted]"
+
+
 def test_apply_masks_aggregated_element_provenance():
     # #44 added elements[].sources / .transforms lists; the redactor must walk
     # them too or a secret survives in the aggregated provenance.

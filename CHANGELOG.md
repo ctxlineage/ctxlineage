@@ -29,6 +29,19 @@ land in minor versions).
   gap is not itself a content regression. `baseline = "..."` resolves
   relative to the `ctxlineage.toml` file's own directory, not the process's
   working directory (#94).
+- Segments and outputs now carry `structured` — the structure the provider
+  itself declared inside a message's content blocks, currently a tool call's
+  own arguments — and the Calls view renders it as a tree beside the text it
+  was flattened into. The structure-aware renderer added in #92 needed a whole
+  body to `JSON.parse`, so on real data it fired on 3 of 64 segments and 0 of
+  15 outputs, every one of them `tool_defs`: a general feature that was in
+  practice a tool-definition viewer. The cause was not a weak heuristic but
+  that `normalize.py` had the parsed block in hand and flattened it to
+  `[tool_use: name({json})]`, which nothing could parse back. Only declared
+  structure is carried: a tool result whose content merely *looks* like JSON
+  was declared a string and stays one, because inferred structure must not be
+  presented as a fact. Redaction walks the new field, including nested values
+  (#103).
 - The Calls view renders a JSON segment or output body as a collapsed,
   expandable tree — top-level keys visible at a glance, nested branches
   opened on click — instead of an undifferentiated wall of quotes and
@@ -41,6 +54,15 @@ land in minor versions).
   (#93).
 
 ### Fixed
+- The Calls view now has a reading order. The fn card rendered `api`,
+  `duration`, `mode`, `span` and `usage` as five identical label-value rows,
+  so nothing led the eye — and three of them are near-constant: across the
+  demo report `api` has two distinct values, `mode` reads "sync" on 15 of 16
+  calls, and `duration` is empty on every imported one, while `usage`
+  restated the window bar directly above it. Cost is now the card's one large
+  number, the fixed facts collapse to a single quiet line (the shape Chain's
+  `.fnpill` already used), and a segment header leads with its token count
+  with the shares set beneath it as context rather than as peers (#103).
 - Graph's flow edges no longer swing out into blank canvas once the source and
   context-element columns collapse. The reserved gutter they route through was
   fixed to the right of the call column — correct in the three-column layout,

@@ -45,13 +45,45 @@ def apply(data: dict, patterns: list[str]) -> int:
             if isinstance(values, list):
                 item[key] = [sub(v) if isinstance(v, str) else v for v in values]
 
+    def sub_deep(value):
+        """Every string inside a declared-structure payload (#103).
+
+        `structured` carries a tool call's own arguments — a file path, a query,
+        an API key someone passed as a parameter. It is the same text as the
+        flattened `content`, so leaving it unwalked would hand back verbatim
+        what the mask just removed one field over.
+        """
+        if isinstance(value, str):
+            return sub(value)
+        if isinstance(value, list):
+            return [sub_deep(v) for v in value]
+        if isinstance(value, dict):
+            return {k: sub_deep(v) for k, v in value.items()}
+        return value
+
+    def sub_structured(item: dict) -> None:
+        parts = item.get("structured")
+        if isinstance(parts, list):
+            item["structured"] = [
+                {
+                    **p,
+                    "name": sub(p["name"]) if isinstance(p.get("name"), str) else p.get("name"),
+                    "value": sub_deep(p.get("value")),
+                }
+                if isinstance(p, dict)
+                else p
+                for p in parts
+            ]
+
     for session in data.get("sessions", []):
         for call in session.get("calls", []):
             for segment in call.get("segments", []):
                 sub_keys(segment, _SEGMENT_KEYS)
+                sub_structured(segment)
             output = call.get("output")
             if isinstance(output, dict):
                 sub_keys(output, ("content",))
+                sub_structured(output)
             error = call.get("error")
             if isinstance(error, dict) and isinstance(error.get("message"), str):
                 error["message"] = sub(error["message"])

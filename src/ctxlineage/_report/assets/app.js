@@ -73,6 +73,30 @@ const jsonTreeHtml = (value, depth = 0) => {
   }).join("")}</div>`;
 };
 
+/* ---------- #103: structure the provider declared, not structure we guessed ----------
+   parseJsonMaybe above only fires when a whole body parses, which across the
+   demo report meant 3 of 64 segments and 0 of 15 outputs — every one of them a
+   tool_defs blob. The richest structure in an agent trace, a tool call's own
+   arguments, arrives wrapped as `[tool_use: Read({...})]` and never parsed.
+   normalize.py now carries those arguments through as `structured` instead of
+   flattening them away, so this renders declared structure and never sniffs. */
+const STRUCT_LABEL = { tool_call: "tool call" };
+const structLabel = (s) =>
+  `${STRUCT_LABEL[s.kind] ?? s.kind}${s.name ? " · " + s.name : ""}`;
+const structOf = (item) => (item && Array.isArray(item.structured) ? item.structured : []);
+const structChip = (list) => list.length
+  ? `<span class="jkind">${esc(list.map(structLabel).join(" · "))}</span>` : "";
+/* Emitted on one line on purpose: this lands inside `.full`/`.body`, which are
+   `white-space: pre-wrap` so the raw text keeps its own formatting. A newline
+   in the markup would render as a blank line in the page. */
+const structHtml = (list) => list.map((s) => {
+  const branch = s.value !== null && typeof s.value === "object";
+  const head = `<div class="jhead">${esc(structLabel(s))}${
+    branch ? ` · <span class="jkind">${esc(jsonKind(s.value))}</span>` : ""}</div>`;
+  const body = branch ? jsonTreeHtml(s.value) : `<div class="jrow">${esc(jsonLeafText(s.value))}</div>`;
+  return `<div class="jstruct">${head}${body}</div>`;
+}).join("");
+
 const stepOf = (c) => {
   // label split (design decision 6, extended by #88): the span name is
   // grouping info (spanNameOf - brackets, fn-card "span" row), never this.
@@ -315,17 +339,24 @@ function renderCallDetail() {
   const segs = rest.map((g) => {
     const ws = !g.content.trim();
     const parsed = ws ? null : parseJsonMaybe(g.content);
+    const struct = structOf(g);
     // Structure at a glance in the collapsed preview too - "json object · 6
-    // keys" answers "what is this?" without reading a character of it.
+    // keys", or "tool call · Read", answers "what is this?" without reading a
+    // character of it.
     const preview = ws ? "(whitespace separator)"
-      : parsed ? `<span class="jkind">${esc(jsonKind(parsed))}</span>` : esc(clip(g.content, 90));
+      : parsed ? `<span class="jkind">${esc(jsonKind(parsed))}</span>`
+      : struct.length ? structChip(struct) + " " + esc(clip(g.content, 70))
+      : esc(clip(g.content, 90));
     const full = ws ? "(whitespace only — separates the surrounding segments)"
-      : parsed ? jsonTreeHtml(parsed) : esc(g.content);
+      : parsed ? jsonTreeHtml(parsed) : esc(g.content) + structHtml(struct);
+    // #103: one number leads. The token cost is what a reader is here for; the
+    // shares are context for it, not peers of it.
     return `
     <div class="seg ${ws ? "ws" : ""}" style="border-left-color:${kindColor(g.kind)}">
       <div class="top"><span class="kind" style="color:${kindColor(g.kind)}">${esc(segLabel(g))}</span>
-        <span class="share">${fmt(g.tokens_est)} tok · ${(100 * g.tokens_est / total).toFixed(0)}% of prompt${
-          showRecovered ? ` · ${(100 * g.tokens_est / segTotal).toFixed(0)}% of recovered` : ""}</span></div>
+        <span class="share"><b>${fmt(g.tokens_est)}</b> tok ·
+          <span class="pct">${(100 * g.tokens_est / total).toFixed(0)}% of prompt${
+          showRecovered ? ` · ${(100 * g.tokens_est / segTotal).toFixed(0)}% of recovered` : ""}</span></span></div>
       <div class="preview" dir="auto">${preview}</div>
       <div class="full" dir="auto">${full}</div>
     </div>`;
@@ -343,29 +374,41 @@ function renderCallDetail() {
       <div class="txt">${esc(sys.map((g) => g.content).join("\n\n"))}</div>
     </div>` : "";
 
+  // #103: the card used to render api / duration / mode / span / usage as five
+  // identical label-value rows, so nothing led. Across the demo report `api`
+  // has two distinct values, `mode` reads "sync" on 15 of 16 calls and
+  // `duration` is empty on every imported one — three rows of near-constant
+  // boilerplate carrying the same weight as the one number worth reading.
+  // Rank them: what ran, what it cost, then the fixed facts on one quiet line
+  // — the shape .fnpill in the Chain view already uses.
+  const meta = [c.api, c.duration_ms ? c.duration_ms.toFixed(0) + " ms" : null,
+                c.stream ? "streaming" : "sync"].filter(Boolean);
   const fn = `
     <div class="fn">
       <div class="stepname">${esc(stepOf(c) ?? "llm call")}()</div>
       <div class="model">${esc(c.model)}</div>
-      <div class="row"><span>api</span><span>${esc(c.api)}</span></div>
-      <div class="row"><span>duration</span><span>${c.duration_ms ? c.duration_ms.toFixed(0) + " ms" : "–"}</span></div>
-      <div class="row"><span>mode</span><span>${c.stream ? "streaming" : "sync"}</span></div>
-      ${spanNameOf(c) && spanNameOf(c) !== stepOf(c) ? `<div class="row"><span>span</span><span>${esc(spanNameOf(c))}</span></div>` : ""}
-      ${c.usage ? `<div class="row"><span>usage</span><span>${fmt(c.usage.total_tokens)} tok</span></div>` : ""}
+      ${c.usage ? `<div class="cost"><b>${fmt(c.usage.total_tokens)}</b> tok
+        <span>${fmt(c.usage.prompt_tokens)} in · ${fmt(c.usage.completion_tokens)} out</span></div>` : ""}
+      <div class="meta">${esc(meta.join(" · "))}</div>
+      ${spanNameOf(c) && spanNameOf(c) !== stepOf(c)
+        ? `<div class="row"><span>span</span><span>${esc(spanNameOf(c))}</span></div>` : ""}
       ${instr}
     </div>`;
 
   const outContent = c.output ? c.output.content : "";
   const outParsed = c.error ? null : parseJsonMaybe(outContent);
+  const outStruct = c.error ? [] : structOf(c.output);
   const out = c.error
     ? `<div class="out error"><div class="head"><span>error</span><span>${esc(c.error.type)}</span></div>
        <div class="body">${esc(c.error.message)}</div></div>`
     : `<div class="out" id="outwrap"><div class="head"><span class="ol">llm output${
-         outParsed ? ` · <span class="jkind">${esc(jsonKind(outParsed))}</span>` : ""
+         outParsed ? ` · <span class="jkind">${esc(jsonKind(outParsed))}</span>`
+           : outStruct.length ? " · " + structChip(outStruct) : ""
        }</span>
          <span>${c.usage ? fmt(c.usage.completion_tokens) + " tok · " : ""}${esc(c.output && c.output.finish_reason || "")}
          <b class="toggle" title="show all / show less">▸</b></span></div>
-       <div class="body" dir="auto">${outParsed ? jsonTreeHtml(outParsed) : esc(outContent)}</div></div>`;
+       <div class="body" dir="auto">${outParsed ? jsonTreeHtml(outParsed)
+         : esc(outContent) + structHtml(outStruct)}</div></div>`;
 
   main.innerHTML = `
     <div class="callhead"><h2>call ${selCall + 1}</h2>

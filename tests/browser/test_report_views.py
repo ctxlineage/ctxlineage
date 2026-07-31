@@ -159,6 +159,57 @@ def test_chain_edges_carry_a_token_count_label_and_snippet_tooltip(
     assert any(" tok · " in t for t in titles), titles
 
 
+def test_calls_renders_declared_structure_as_a_tree(open_report, imported_report, imported_data):
+    """#103: the JSON tree used to fire on 3 of 64 segments and 0 of 15 outputs,
+    all tool_defs - a general feature that was really a tool-definition viewer.
+    A tool call's arguments now arrive as declared structure and render."""
+    index = next(
+        i
+        for i, c in enumerate(c for s in imported_data["sessions"] for c in s["calls"])
+        if any(seg.get("structured") for seg in c["segments"])
+    )
+    page = open_report(imported_report)
+    page.click('.tab[data-view="calls"]')
+    page.click(f'.callrow[data-i="{index}"]')
+    # the body is collapsed until the segment is opened
+    seg = page.locator(".seg:has(.jstruct)").first
+    assert seg.locator(".preview .jkind").inner_text().lower().startswith("tool call")
+    seg.click()
+    page.wait_for_selector(".seg.open .jstruct")
+
+    head = seg.locator(".jstruct .jhead").first.inner_text()
+    assert head.lower().startswith("tool call"), head
+    # the tree is real rows, not the flattened envelope re-printed
+    assert seg.locator(".jstruct .jkey").count() > 0
+    # and the text it was flattened into is still there beside it
+    assert "[tool_use:" in seg.locator(".full").inner_text()
+
+
+def test_calls_fn_card_ranks_cost_above_the_fixed_facts(open_report, live_report):
+    """#103: api / duration / mode / usage rendered as identical rows, so
+    nothing led - and three of them are near-constant across a whole report."""
+    page = open_report(live_report)
+    page.click('.tab[data-view="calls"]')
+    page.click('.callrow[data-i="0"]')
+    page.wait_for_selector(".fn .cost")
+
+    cost = page.locator(".fn .cost b").first
+    meta = page.locator(".fn .meta").first
+    assert cost.inner_text().strip()
+    # the fixed facts are one line now, not one row each
+    assert page.locator('.fn .row:has-text("api")').count() == 0
+    assert page.locator('.fn .row:has-text("mode")').count() == 0
+    assert "·" in meta.inner_text()
+    # and the cost is set larger than the line of fixed facts
+    cost_px = page.evaluate(
+        "() => parseFloat(getComputedStyle(document.querySelector('.fn .cost b')).fontSize)"
+    )
+    meta_px = page.evaluate(
+        "() => parseFloat(getComputedStyle(document.querySelector('.fn .meta')).fontSize)"
+    )
+    assert cost_px > meta_px, f"cost {cost_px}px is not above meta {meta_px}px"
+
+
 def _open_graph(open_report, report: str, index: int):
     page = open_report(report)
     page.click('.tab[data-view="graph"]')

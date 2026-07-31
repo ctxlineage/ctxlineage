@@ -845,6 +845,81 @@ def test_anthropic_tool_use_block_surfaced_not_dropped():
     assert "get_weather" in seg["content"] and "Paris" in seg["content"]
 
 
+def test_tool_use_input_carried_through_as_declared_structure():
+    # #103: flattening a tool_use block to `[tool_use: name({json})]` was the
+    # only trace kept, and the frontend's JSON renderer needs a whole body to
+    # parse - so it never fired on the richest structure an agent trace has.
+    payload = _anthropic_payload(
+        {
+            "messages": [
+                {
+                    "role": "assistant",
+                    "content": [
+                        {"type": "text", "text": "Let me check."},
+                        {
+                            "type": "tool_use",
+                            "id": "tu1",
+                            "name": "get_weather",
+                            "input": {"city": "Paris", "units": "c"},
+                        },
+                    ],
+                }
+            ]
+        }
+    )
+    (seg,) = normalize.build_report_data([_event(payload)])["sessions"][0]["calls"][0]["segments"]
+
+    assert seg["structured"] == [
+        {"kind": "tool_call", "name": "get_weather", "value": {"city": "Paris", "units": "c"}}
+    ]
+    # the flattened text still stands on its own - structure is added, not swapped
+    assert "get_weather" in seg["content"] and "Paris" in seg["content"]
+
+
+def test_declared_structure_never_parses_json_out_of_free_text():
+    # the honest boundary: a tool_result whose content merely *looks* like JSON
+    # was declared by the provider as a string. Presenting it as structure
+    # would dress an inference up as a fact.
+    payload = _anthropic_payload(
+        {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "tu1",
+                            "content": '{"temp": 21, "sky": "clear"}',
+                        }
+                    ],
+                }
+            ]
+        }
+    )
+    (seg,) = normalize.build_report_data([_event(payload)])["sessions"][0]["calls"][0]["segments"]
+
+    assert "structured" not in seg
+    assert '{"temp": 21' in seg["content"]
+
+
+def test_tool_use_in_the_response_carried_through_as_declared_structure():
+    # the output side of the same gap: measured on the demo report, zero of 15
+    # outputs rendered as structure before this.
+    payload = _anthropic_payload({"messages": [{"role": "user", "content": "weather?"}]})
+    payload["response"] = {
+        "type": "message",
+        "stop_reason": "tool_use",
+        "content": [
+            {"type": "tool_use", "id": "tu1", "name": "get_weather", "input": {"city": "Paris"}}
+        ],
+    }
+    call = normalize.build_report_data([_event(payload)])["sessions"][0]["calls"][0]
+
+    assert call["output"]["structured"] == [
+        {"kind": "tool_call", "name": "get_weather", "value": {"city": "Paris"}}
+    ]
+
+
 def test_anthropic_tool_result_block_surfaced_as_tool_segment():
     # anthropic feeds tool output back as a user-role message of tool_result
     # blocks — surface it as a tool segment, not as user input.
