@@ -117,6 +117,7 @@ let selCall = 0;
 let selSession = 0;
 let hiFrom = null;
 let chainEdges = [];
+let chainLanes = null;   // lane assignment for the current session, sized by renderChain
 
 const calls = [];
 data.sessions.forEach((s, si) => s.calls.forEach((c) => calls.push({ s, si, c })));
@@ -542,6 +543,14 @@ function renderChain() {
   const edges = findEdges(s);
   const loops = findLoops(s, edges);
   chainEdges = edges;  // cache for drawEdges (avoid recomputing per frame)
+  // Size the gutter before the rows lay out: .node's padding-left reads this
+  // token, and drawEdges reads it back to place the lanes, so one number
+  // drives both. Lanes are assigned here rather than in drawEdges because the
+  // count is what the width is derived from.
+  chainLanes = assignLanes(edges.filter(([i, j]) => j > i + 1));
+  const laneN = laneCount(chainLanes);
+  const shared = sharedLanes(laneN);
+  document.body.style.setProperty("--chain-gutter", gutterFor(laneN) + "px");
   const targets = hiFrom === null ? [] : edges.filter((e) => e[0] === hiFrom).map((e) => e[1]);
   const dsMap = new Map();
   edges.forEach(([a, b]) => { if (b > a + 1) dsMap.set(a, (dsMap.get(a) || 0) + 1); });
@@ -575,7 +584,10 @@ function renderChain() {
   main.innerHTML = `${h}<div id="wrap"><svg id="edges"></svg><div id="chain">${body}</div></div>
     <div class="note">every arrow here, next-call and later-call alike, is inferred from the
     data — an output's text found inside a later call's input. Tagging (span API) will add
-    source-level precision.</div>`;
+    source-level precision.${shared
+      ? ` This session fans out past the gutter's ${GUTTER_LANES} lanes:
+          <b>${shared} later flows share the outermost lane</b> and cannot be told apart
+          there — click an output to isolate one.` : ""}</div>`;
   main.querySelectorAll(".outchip").forEach((el) =>
     el.addEventListener("click", () => {
       hiFrom = hiFrom === +el.dataset.i ? null : +el.dataset.i; render();
@@ -605,7 +617,8 @@ function orthPath(pts, r = 8) {
    drawing them all at rest was not an option and they were hidden behind a
    click instead. Ranges that merely meet at a row (2->4 and 4->6) are treated
    as conflicting, so the shared row never reads as one continuous line. */
-const GUTTER_LANES = 5;
+const GUTTER_LANES = 8;   // most lanes drawn side by side before they share
+const LANE_X0 = 22, LANE_W = 8, GUTTER_PAD = 12, GUTTER_MIN = 40;
 function assignLanes(hops) {
   const lane = new Map();
   const lastRow = [];
@@ -617,6 +630,20 @@ function assignLanes(hops) {
   });
   return lane;
 }
+const laneCount = (lanes) => (lanes.size ? Math.max(...lanes.values()) + 1 : 0);
+/* assignLanes is unbounded — one source call may fan out to _MAX_EDGES_PER_SOURCE
+   (32) later calls, all overlapping, so it can hand back lane 31. Folding that
+   into a fixed number of slots with `%` would put lane 5 back on lane 0's x and
+   silently restore the overprint the allocator exists to prevent. Grow the
+   gutter with the lanes instead, and past the cap let the outermost lane be
+   shared *and say so* — 31 parallel lines separate nothing anyway, and
+   click-to-trace still resolves any single flow. */
+const laneSlot = (k) => Math.min(k, GUTTER_LANES - 1);
+const gutterFor = (n) =>
+  Math.max(GUTTER_MIN, LANE_X0 + Math.min(n, GUTTER_LANES) * LANE_W + GUTTER_PAD);
+const sharedLanes = (n) => (n > GUTTER_LANES ? n - GUTTER_LANES + 1 : 0);
+const SEAT_MAX = 3;   // horizontal runs stacked in one row gap before they stop spreading
+const seatOff = (n) => Math.min(n, SEAT_MAX) * 5;
 
 function drawEdges() {
   const svg = document.getElementById("edges");
@@ -627,17 +654,17 @@ function drawEdges() {
   const wr = wrap.getBoundingClientRect();
   svg.setAttribute("viewBox", `0 0 ${wr.width} ${wr.height}`);
   const bodyStyle = getComputedStyle(document.body);
-  const edgeCol = bodyStyle.getPropertyValue("--edge").trim() || "#1FBFAE";
-  const hiCol = bodyStyle.getPropertyValue("--edge-hi").trim() || "#11897d";
-  const dimCol = bodyStyle.getPropertyValue("--edge-dim").trim() || "rgba(107,118,130,.35)";
-  /* Markers cannot inherit the path's stroke-opacity, so the quieter weights
-     need their own arrowhead rather than one shared marker. */
-  const arrow = (id, fill, w, op) =>
+  /* Markers reference the tokens directly rather than a getComputedStyle
+     round-trip, so no resolved hex is ever written into the markup — the
+     Graph view's own markers already do this. Markers cannot inherit the
+     path's stroke-opacity, so the quieter weights need their own arrowhead
+     rather than one shared marker. */
+  const arrow = (id, token, w, op) =>
     `<marker id="${id}" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="${w}"
        markerHeight="${w}" orient="auto-start-reverse">
-       <path d="M0,0 L10,5 L0,10 z" fill="${fill}" fill-opacity="${op}"/></marker>`;
-  let h = `<defs>${arrow("arr", edgeCol, 7, 1)}${arrow("arrhi", hiCol, 8, 1)}
-    ${arrow("arrsub", edgeCol, 6, 0.55)}${arrow("arrdim", dimCol, 6, 1)}</defs>`;
+       <path d="M0,0 L10,5 L0,10 z" fill="var(${token})" fill-opacity="${op}"/></marker>`;
+  let h = `<defs>${arrow("arr", "--edge", 7, 1)}${arrow("arrhi", "--edge-hi", 8, 1)}
+    ${arrow("arrsub", "--edge", 6, 0.55)}${arrow("arrdim", "--edge-dim", 6, 1)}</defs>`;
   const all = chainEdges.length ? chainEdges : findEdges(s);
   /* #104: everything is drawn at rest. Adjacent hops keep the full-weight
      subway hop through the row gap; the later flows — the ones worth the
@@ -645,7 +672,7 @@ function drawEdges() {
      down the gutter instead of waiting for a click. Clicking now promotes one
      source's flows and dims the rest, rather than being the only way to see
      them at all. */
-  const lanes = assignLanes(all.filter(([i, j]) => j > i + 1));
+  const lanes = chainLanes ?? assignLanes(all.filter(([i, j]) => j > i + 1));
   /* Several hops can leave one row or arrive at another; stagger their
      horizontal runs through the row gap so they stack instead of overprinting. */
   const outN = new Map(), inN = new Map();
@@ -654,8 +681,11 @@ function drawEdges() {
   [...all].sort((a, b) => a[0] - b[0] || a[1] - b[1]).forEach(([i, j]) => {
     seat.set(i + ">" + j, { out: bump(outN, i), in: bump(inN, j) });
   });
-  /* lane x inside the reserved gutter — see --chain-gutter in style.css */
-  const laneX = (k) => 22 + (k % GUTTER_LANES) * 8;
+  /* Lane x is derived from the live --chain-gutter that renderChain sized, so
+     the routing and the row padding cannot disagree: shrink the token and the
+     lanes move in with it rather than sliding under the row content. */
+  const gutter = parseFloat(bodyStyle.getPropertyValue("--chain-gutter")) || GUTTER_MIN;
+  const laneX = (k) => Math.min(LANE_X0 + laneSlot(k) * LANE_W, gutter - GUTTER_PAD);
   all.forEach(([i, j]) => {
     const a = document.querySelector(`.node[data-n="${i}"] .outchip`);
     const bNode = document.querySelector(`.node[data-n="${j}"]`);
@@ -717,8 +747,11 @@ function drawEdges() {
          other chips). The two horizontal runs are seated per row so several
          hops leaving or arriving together stay readable. */
       const lx = laneX(lanes.get(i + ">" + j) ?? 0);
-      const gapY1 = y1 + 8 + st.out * 5;
-      const gapY2 = y2 - 10 - st.in * 5;
+      // Seats are unbounded (a source can feed many later calls) but the row
+      // gap is not: past a few, an unclamped offset walks the horizontal run
+      // into the neighbouring row and across its fn pill.
+      const gapY1 = y1 + 8 + seatOff(st.out);
+      const gapY2 = y2 - 10 - seatOff(st.in);
       h += `<g>${label((lx + x2) / 2, gapY2 - 4)}
         <path d="${orthPath([[x1, y1], [x1, gapY1], [lx, gapY1], [lx, gapY2], [x2, gapY2], [x2, y2]])}" ${stroke}/></g>`;
     }
@@ -795,12 +828,24 @@ function renderGraphView() {
   // tagging nothing (hasElements false with real span_ids). The span
   // bracket below sits at `COLX.call - 16`; 10 would put it at negative x,
   // bleeding past the SVG's own left edge (found by adversarial review).
+  // Lanes must be known before the columns are placed: in the collapsed layout
+  // the call column's x is what leaves room for them.
+  const callIdx = new Map(s.calls.map((c, i) => ["call:" + c.id, i]));
+  const flowHops = g.edges
+    .filter((e) => e.kind === "flows")
+    .map((e) => [callIdx.get(e.from), callIdx.get(e.to)])
+    .filter(([a, b]) => a != null && b != null && b > a + 1);
+  const flowLanes = assignLanes(flowHops);
+  const flowLaneN = Math.min(laneCount(flowLanes), GUTTER_LANES);
+  const GLANE_W = 14, GLANE_X0 = 20;
   // #102: in the collapsed layout the call column also has to leave room for
-  // the flow gutter that moves to its left (see flowGutter below) and for the
-  // span bracket at `COLX.call - 16` that sits between the two.
+  // the flow gutter that moves to its left (see laneX below) and for the span
+  // bracket at `COLX.call - 16` that sits between the two. Derived from the
+  // lane count, not fixed: lanes used to fold `% 5`, which capped the width by
+  // silently stacking flow 6 onto flow 1's x.
   const COLX = hasElements
     ? { source: 10, element: 260, call: 560 }
-    : { source: 10, element: 10, call: 120 };
+    : { source: 10, element: 10, call: Math.max(120, GLANE_X0 + flowLaneN * GLANE_W + 30) };
   const W = { source: 210, element: 250, call: 240 };
   const H = { source: 34, element: 46, call: 52 };
   const GAPY = 26;
@@ -831,16 +876,14 @@ function renderGraphView() {
   // the layout it was designed for. Once those columns collapse there are no
   // provenance edges at all, and a right-hand gutter leaves the flows swinging
   // out into blank canvas, pointing at nothing. Then the free side is the left.
-  const callIdx = new Map(s.calls.map((c, i) => ["call:" + c.id, i]));
-  const flows = g.edges.filter((e) => e.kind === "flows");
-  const hops = flows
-    .map((e) => [callIdx.get(e.from), callIdx.get(e.to)])
-    .filter(([a, b]) => a != null && b != null && b > a + 1);
-  const flowLanes = assignLanes(hops);
-  const laneStep = hasElements ? 14 : -14;
-  const laneBase = hasElements ? COLX.call + W.call + 30 : 76;
-  const laneX = (k) => laneBase + (k % GUTTER_LANES) * laneStep;
-  const svgW = hasElements ? laneBase + 110 : COLX.call + W.call + 30;
+  // Collapsed: lanes fill rightward from the left edge, ending just short of
+  // the span bracket. Three-column: rightward from past the call column. Both
+  // clamp to the last slot rather than wrapping onto an occupied one.
+  const laneBase = hasElements ? COLX.call + W.call + 30 : GLANE_X0;
+  const laneX = (k) => laneBase + laneSlot(k) * GLANE_W;
+  const svgW = hasElements
+    ? laneBase + flowLaneN * GLANE_W + 80
+    : COLX.call + W.call + 30;
   const maxTok = els.reduce((a, n) => Math.max(a, n.tok || 0), 1);
   const nodeDim = (id) => (lit && !lit.has(id) ? "dimmed" : "");
   const edgeLit = (e) => lit && lit.has(e.from) && lit.has(e.to);
@@ -942,7 +985,7 @@ function renderGraphView() {
   const heads = `
     ${hasElements ? head(COLX.source, "SOURCES") + head(COLX.element, "CONTEXT ELEMENTS") : ""}
     ${head(COLX.call, "LLM CALLS ↓ TIME")}
-    ${lanesUsed ? head(laneBase, "FLOWS", hasElements ? "start" : "end") : ""}`;
+    ${lanesUsed ? head(laneBase, "FLOWS") : ""}`;
 
   // Untagged banner: actionable for a native-capture user (they can tag);
   // honest, not actionable, for an imported session (tagging is structurally
@@ -957,7 +1000,9 @@ function renderGraphView() {
   main.innerHTML = `<div id="graphwrap">${hint}
     <svg width="${svgW}" height="${height}" style="overflow:visible">${defs}${bh}${heads}${eh}${nh}</svg>
     <div class="note">click any node to trace its lineage (upstream + downstream); click again to clear.
-    dashed element = tagged but never matched.</div></div>`;
+    dashed element = tagged but never matched.${sharedLanes(laneCount(flowLanes))
+      ? ` <b>${sharedLanes(laneCount(flowLanes))} later flows share the outermost lane</b>
+          and cannot be told apart there — click a call to trace one.` : ""}</div></div>`;
   main.querySelectorAll(".nodebox").forEach((el) =>
     el.addEventListener("click", () => {
       graphFocus = graphFocus === el.dataset.id ? null : el.dataset.id;

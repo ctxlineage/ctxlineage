@@ -13,6 +13,9 @@ import pytest
 
 pytest.importorskip("playwright.sync_api")
 
+# mirrors GUTTER_LANES in app.js; the tests below must outgrow it to be a guard
+GUTTER_LANES_EXPECTED = 8
+
 VIEW_MARKERS = {
     "overview": ".ov .statcard",
     "calls": ".windowbar .bar i",
@@ -355,6 +358,118 @@ def _spanned_untagged_events() -> list[dict]:
             ts="2026-06-12T09:01:00+00:00",
         ),
     ]
+
+
+def _fan_out_events(n_calls: int) -> list[dict]:
+    """One session where call 1's output stays in every later call's input, so
+    every later flow overlaps every other and the lane allocator is forced past
+    any fixed number of slots (#104's allocator can return lane 31 -
+    `_MAX_EDGES_PER_SOURCE` is 32)."""
+    seed = "SEED-OUTPUT that is comfortably longer than the minimum edge text"
+    events = []
+    for i in range(n_calls):
+        # every call after the first carries call 1's output in its own input
+        content = "hi" if i == 0 else f"turn {i} continuing from {seed}"
+        events.append(
+            _event(
+                "llm_call",
+                "session-fan-out",
+                {
+                    "provider": "openai",
+                    "api": "chat.completions",
+                    "request": {
+                        "model": "gpt-4o-mini",
+                        "messages": [{"role": "user", "content": content}],
+                    },
+                    "response": {
+                        "choices": [
+                            {
+                                "message": {"role": "assistant", "content": seed},
+                                "finish_reason": "stop",
+                            }
+                        ]
+                    },
+                    "usage": {"prompt_tokens": 5, "completion_tokens": 2, "total_tokens": 7},
+                    "stream": False,
+                    "duration_ms": 5.0,
+                    "call_stack": [],
+                },
+                call_id=f"c{i}",
+                ts=f"2026-06-12T09:{i:02d}:00+00:00",
+            )
+        )
+    return events
+
+
+def test_chain_lanes_never_wrap_onto_an_occupied_lane(open_report, render_events):
+    """#104 follow-up: the allocator is unbounded, so folding its result into a
+    fixed slot count with `%` puts lane N back on lane 0's x - restoring the
+    exact overprint the allocator exists to prevent, just further out. Two
+    flows may share a lane only where the view *says* they do."""
+    page = open_report(render_events(_fan_out_events(12)))
+    page.click('.tab[data-view="chain"]')
+    page.wait_for_selector("#chain .node")
+    page.wait_for_function("document.querySelectorAll('svg#edges path').length > 0")
+
+    result = page.evaluate(
+        """() => {
+          const hops = [...chainLanes.keys()].map(k => {
+            const [i, j] = k.split('>').map(Number);
+            return {i, j, x: LANE_X0 + laneSlot(chainLanes.get(k)) * LANE_W};
+          });
+          const outermost = LANE_X0 + (GUTTER_LANES - 1) * LANE_W;
+          let collisions = 0, offSharedLane = 0;
+          for (let a = 0; a < hops.length; a++)
+            for (let b = a + 1; b < hops.length; b++) {
+              if (hops[a].x !== hops[b].x) continue;
+              if (Math.max(hops[a].i, hops[b].i) >= Math.min(hops[a].j, hops[b].j)) continue;
+              collisions++;
+              if (hops[a].x !== outermost) offSharedLane++;
+            }
+          return {hops: hops.length, lanes: laneCount(chainLanes), collisions, offSharedLane,
+                  discloses: /share the outermost/.test(
+                    document.querySelector('#main .note').innerText)};
+        }"""
+    )
+
+    assert result["hops"] > GUTTER_LANES_EXPECTED, "fixture must exceed the lane cap"
+    assert result["lanes"] > GUTTER_LANES_EXPECTED, "allocator must exceed the lane cap"
+    # below the cap, no overlapping pair may share an x
+    assert result["offSharedLane"] == 0, result
+    # at the cap, sharing is allowed only because the view discloses it
+    assert result["collisions"] > 0 and result["discloses"], result
+
+
+def test_chain_gutter_token_drives_the_lanes(open_report, render_events):
+    """The token is load-bearing, not decorative: renderChain sizes it from the
+    lane count, the row padding uses it, and drawEdges reads it back."""
+    page = open_report(render_events(_fan_out_events(12)))
+    page.click('.tab[data-view="chain"]')
+    page.wait_for_selector("#chain .node")
+    page.wait_for_function("document.querySelectorAll('svg#edges path').length > 0")
+
+    wide = page.evaluate(
+        """() => ({
+             token: parseFloat(getComputedStyle(document.body)
+                      .getPropertyValue('--chain-gutter')),
+             pad: parseFloat(getComputedStyle(document.querySelector('.node')).paddingLeft),
+           })"""
+    )
+    assert wide["token"] > 40, "a fan-out session must grow the gutter past the floor"
+    assert wide["pad"] == wide["token"], "row padding must follow the token"
+
+    # shrinking the token must pull the lanes in, not leave them under the rows
+    pulled_in = page.evaluate(
+        """() => {
+             document.body.style.setProperty('--chain-gutter', '40px');
+             drawEdges();
+             const g = 40 - 12;  // GUTTER_PAD
+             return [...document.querySelectorAll('svg#edges > g path')]
+               .every(p => (p.getAttribute('d').match(/[ML] ([\\d.]+) /g) || [])
+                 .every(m => { const x = parseFloat(m.slice(2)); return x > 200 || x <= g + 8; }));
+           }"""
+    )
+    assert pulled_in, "lanes ignored the shrunken --chain-gutter"
 
 
 def test_graph_span_bracket_has_no_negative_coordinates_when_untagged(open_report, render_events):

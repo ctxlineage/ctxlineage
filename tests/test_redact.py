@@ -172,6 +172,116 @@ def test_apply_masks_declared_structure():
     assert out["value"]["q"] == "[redacted]"
 
 
+def test_apply_masks_structured_object_keys():
+    """A tool argument is routinely a map keyed by an address, an id or a path,
+    and a key reaches the rendered tree exactly as a value does. Before
+    `structured` existed keys could only arrive by parsing an already-masked
+    `content`, so they were covered for free; the new field has to mask them
+    itself or `--redact` hands back verbatim what it removed one field over.
+    """
+    data = {
+        "sessions": [
+            {
+                "calls": [
+                    {
+                        "segments": [
+                            {
+                                "content": f'[tool_use: Notify({{"{SECRET}": "cc"}})]',
+                                "structured": [
+                                    {
+                                        "kind": "tool_call",
+                                        "name": "Notify",
+                                        "value": {"recipients": {SECRET: "cc"}},
+                                    }
+                                ],
+                            }
+                        ],
+                        "output": None,
+                    }
+                ]
+            }
+        ]
+    }
+    redact.apply(data, [re.escape(SECRET)])
+
+    part = data["sessions"][0]["calls"][0]["segments"][0]["structured"][0]
+    assert part["value"]["recipients"] == {"[redacted]": "cc"}
+    assert SECRET not in json.dumps(data)
+
+
+def test_apply_keeps_colliding_structured_keys_distinct():
+    """Masking is many-to-one, so a plain dict comprehension drops a key *and
+    its value* and then reports `object · 1 key` for what were two. Numbering
+    the repeats keeps every value and keeps the arity the UI prints true.
+    Keys the mask did not touch are reserved first, so a real key is never
+    renamed to make room for a masked one."""
+    data = {
+        "sessions": [
+            {
+                "calls": [
+                    {
+                        "segments": [
+                            {
+                                "content": "x",
+                                "structured": [
+                                    {
+                                        "kind": "tool_call",
+                                        "name": "N",
+                                        "value": {
+                                            "[redacted]": 0,  # a literal collision target
+                                            "a@x.example": 1,
+                                            "b@x.example": 2,
+                                            "keep": 3,
+                                        },
+                                    }
+                                ],
+                            }
+                        ],
+                        "output": None,
+                    }
+                ]
+            }
+        ]
+    }
+    redact.apply(data, [r"[\w.]+@[\w.]+"])
+
+    value = data["sessions"][0]["calls"][0]["segments"][0]["structured"][0]["value"]
+    assert len(value) == 4, f"an entry was dropped: {value}"
+    assert sorted(value.values()) == [0, 1, 2, 3], "a value was lost"
+    assert value["[redacted]"] == 0, "an unmasked key was renamed"
+    assert value["keep"] == 3
+    assert not any("@" in k for k in value), value
+
+
+def test_apply_does_not_double_count_structured_matches():
+    """`structured` is a second representation of text `content` already
+    carries. The disclosed count says how much was found, not how many copies
+    of the report data happen to hold it."""
+    data = {
+        "sessions": [
+            {
+                "calls": [
+                    {
+                        "segments": [
+                            {
+                                "content": f'[tool_use: Send({{"to": "{SECRET}"}})]',
+                                "structured": [
+                                    {"kind": "tool_call", "name": "Send", "value": {"to": SECRET}}
+                                ],
+                            }
+                        ],
+                        "output": None,
+                    }
+                ]
+            }
+        ]
+    }
+    count = redact.apply(data, [re.escape(SECRET)])
+
+    assert count == 1, f"one occurrence disclosed as {count}"
+    assert SECRET not in json.dumps(data)
+
+
 def test_apply_masks_aggregated_element_provenance():
     # #44 added elements[].sources / .transforms lists; the redactor must walk
     # them too or a secret survives in the aggregated provenance.

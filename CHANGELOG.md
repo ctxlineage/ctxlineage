@@ -40,8 +40,14 @@ land in minor versions).
   `[tool_use: name({json})]`, which nothing could parse back. Only declared
   structure is carried: a tool result whose content merely *looks* like JSON
   was declared a string and stays one, because inferred structure must not be
-  presented as a fact. Redaction walks the new field, including nested values
-  (#103).
+  presented as a fact. Redaction walks the new field — nested values **and
+  object keys**, which reach the rendered tree exactly as values do and which
+  were previously covered for free by only ever arriving through an
+  already-masked `content` string. Because masking is many-to-one, colliding
+  keys are numbered rather than merged, so no value is dropped and the key
+  count the UI prints stays true; and because `structured` is a second
+  representation of text `content` already carries, it is masked without
+  counting, so one secret is not disclosed as two (#103).
 - The Calls view renders a JSON segment or output body as a collapsed,
   expandable tree — top-level keys visible at a glance, nested branches
   opened on click — instead of an undifferentiated wall of quotes and
@@ -87,7 +93,12 @@ land in minor versions).
   drawing them all impossible before), at a lighter weight than the adjacent
   chain. Clicking an output still isolates that call's flows, but is no
   longer the only way to see them. Both weights are inferred the same way and
-  the view says so (#104).
+  the view says so. The gutter grows with the lane count rather than folding
+  lanes back onto one another past a fixed few — one source call may feed 32
+  later calls, and reusing an occupied lane would restore the very overprint
+  the allocator exists to prevent. Past the gutter's capacity the outermost
+  lane is shared and the view discloses it, rather than implying a separation
+  it is not providing (#104).
 - Imported agent-loop sessions no longer show every call in one episode with
   the identical label (the human turn's own sentence) across Overview, Chain,
   the Calls sidebar and the fn card — in a real trial, 38 consecutive calls

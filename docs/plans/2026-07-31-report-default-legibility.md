@@ -247,6 +247,62 @@ a CSS custom property).
 New geometry lives in `--chain-gutter` so `drawEdges()` and the row padding
 cannot drift apart. `assignLanes()` is shared by both views.
 
+### 4.1 Fixed after adversarial review
+
+The first cut shipped two real defects, both found by review rather than by the
+tests written alongside them. Recorded because each says something about where
+the tests were pointed.
+
+**`--redact` stopped covering everything it renders.** `structured` was a new
+path to the DOM that redaction walked for values but not for **keys**. Before
+it existed, a key could only reach the page by `JSON.parse`-ing an
+already-masked `content` string, so keys were covered for free; adding a second
+carrier quietly removed that. A tool argument keyed by an address or a path
+(`{"alice@corp.example": "cc"}`) rendered verbatim one line under the mask that
+had removed the same string from the text. The test that was supposed to cover
+this only put the secret in *values* — it asserted the absence of a leak on the
+half of the structure that was never at risk.
+
+Masking keys is many-to-one, so it needs collision handling of its own: a plain
+dict comprehension drops a key **and its value**, then reports `object · 1 key`
+for what were two. Repeats are now numbered (`[redacted]`, `[redacted] 2`), so
+no value is lost and the arity the UI prints stays true; keys the mask did not
+touch are reserved first so a real key is never renamed to make room.
+
+Relatedly, the disclosed match count counted the same secret twice, once per
+carrier. `structured` is masked without counting: the number says how much was
+found, not how many copies of the report data hold it.
+
+**The lane allocator's guarantee did not survive contact with the lane
+renderer.** `assignLanes` is correct and unbounded — one source may fan out to
+`_MAX_EDGES_PER_SOURCE` (32) later calls, all overlapping, so it can return
+lane 31 — but `laneX` folded it `% 5`. The 6th overlapping flow drew on the 1st
+flow's x: the exact "all later flows on one shared x, stacked into an
+unreadable line" that this whole change was written to remove, moved from 1
+flow to 6, and reachable on any 11-call session where an early output persists.
+Measured before the fix: 9 overlapping flows put 4 lanes at 2 flows each.
+
+The lane test passed throughout, because `len(gutter_xs) >= 2` is satisfied by
+9 flows on 5 lanes. It asserted that lanes exist, not that they separate. The
+replacement asserts the actual invariant — no two flows that overlap in row
+range share an x — and uses a 12-call fan-out fixture that forces the allocator
+past the cap.
+
+The gutter now grows with the lane count (`renderChain` sizes `--chain-gutter`,
+`drawEdges` reads it back, so the token is load-bearing rather than
+decorative — the previous claim that it was read back was simply false). Past
+the cap the outermost lane is shared **and the view says so**, because 31
+parallel lines separate nothing and silently pretending otherwise is the thing
+being fixed. The same clamp applies to the per-row seat offsets, which were
+also unbounded against a fixed 26px row gap.
+
+Two smaller things fixed in passing: the collapsed Graph's leftward lanes would
+have gone *negative* past 4 lanes once the wrap was removed (the wrap had been
+masking it), so that layout now derives its call-column x from the lane count;
+and the Chain's arrowhead markers inlined a `getComputedStyle`-resolved hex
+into the markup, which the Graph's markers already avoided by referencing the
+token directly.
+
 ### Follow-ups, deliberately not in scope
 
 - **OpenAI `tool_calls`.** `_chat_output` surfaces `message.content` only, so a

@@ -11,10 +11,12 @@
   --edge: rgba(31, 191, 174, .75); --edge-hi: #11897d;
   --tag1: #3BA55D; --tag2: #D0699E; --tag3: #3FA7BD; --tag4: #9A8F2B; --tag5: #C46B5A;
   /* #104: reserved gutter down the left of the chain rows. Every non-adjacent
-     output->input flow is routed here, one lane each, so drawEdges() and the
-     row padding cannot drift apart — the JS reads this value back. Lanes run
-     22px..54px (5 x 8px); the rest is clearance for the row number. */
-  --chain-gutter: 66px;
+     output->input flow is routed here, one lane each. renderChain() rewrites
+     this per session from the lane count and drawEdges() reads it back to
+     place the lanes, so the routing and this padding cannot drift apart —
+     shrink it and the lanes move in with it. This value is the floor used
+     before a session is drawn. */
+  --chain-gutter: 40px;
 }
 [data-theme="dark"] {
   --bg: #1b2026; --panel: #252B33; --text: #e8ecf1; --muted: #94a0ac;
