@@ -383,6 +383,37 @@ def _paired_calls(session: dict, other_session: dict):
             yield step, None, orphan
 
 
+def _session_count_gap(rule: str, data: dict, other: dict, other_label: str) -> Finding | None:
+    """Warn when two runs hold different numbers of sessions.
+
+    Positional pairing zips the two session lists, so the extras on the
+    longer side are simply never visited. Silently comparing fewer sessions
+    than the run contains is the "unevaluated reads as a pass" failure this
+    track exists to prevent, so it has to surface even though there is no
+    natural identity to name the extras by.
+    """
+    here, there = len(data["sessions"]), len(other["sessions"])
+    if here == there:
+        return None
+    return Finding(
+        rule,
+        WARN,
+        f"this run has {here} session(s) and {other_label} has {there} - only the first "
+        f"{min(here, there)} were paired, the rest were not compared at all",
+    )
+
+
+def _tag_declared(session: dict, name: str) -> bool:
+    """Did this run declare `name` as a tag, whether or not it matched?
+
+    `elements` records every `tag()` call, with its own `matched` flag - so
+    "no element named X" means the run never claimed to have X at all
+    (untagged, or a different pipeline), which is a different thing from
+    "declared X but it did not reach the window."
+    """
+    return any(element["name"] == name for element in session.get("elements") or ())
+
+
 def _kind_ever_present(kind: str, *datasets: dict) -> bool:
     """Did this segment kind appear anywhere across the given runs?
 
@@ -434,14 +465,34 @@ class SegmentDiff:
     def check(self, data: dict) -> list[Finding]:
         findings: list[Finding] = []
         evaluated_any = False
-        # strict=False: a session count mismatch has no natural identity to
-        # name the extras by - the extra sessions on the longer side are
-        # simply not compared, not an error.
+        paired_any = False
+        # strict=False: the extras on the longer side have no natural identity
+        # to pair by, so they are not compared - but that is reported below
+        # rather than passed over in silence.
         pairs = zip(data["sessions"], self.baseline_data["sessions"], strict=False)
         for session, baseline_session in pairs:
-            session_findings, session_evaluated = self._check_session(session, baseline_session)
+            session_findings, session_evaluated, session_paired = self._check_session(
+                session, baseline_session
+            )
             findings.extend(session_findings)
             evaluated_any = evaluated_any or session_evaluated
+            paired_any = paired_any or session_paired
+        gap = _session_count_gap(self.NAME, data, self.baseline_data, "the baseline")
+        if gap is not None:
+            findings.append(gap)
+        if not paired_any:
+            # No call was ever put next to a counterpart - an empty or
+            # unrelated baseline. Reporting this as a pass would be the exact
+            # "unevaluated reads as green" failure the tier rule forbids.
+            findings.append(
+                Finding(
+                    self.NAME,
+                    WARN,
+                    "no call could be paired with the baseline, so nothing was compared - "
+                    "check that the baseline is the same pipeline's recorded run",
+                )
+            )
+            return findings
         # Mirrors WindowBudget's typo guard: a segment kind that never
         # appears on either side of the diff is indistinguishable, by the
         # math alone, from "genuinely never grew" - delta is always 0 either
@@ -459,9 +510,12 @@ class SegmentDiff:
             )
         return findings
 
-    def _check_session(self, session: dict, baseline_session: dict) -> tuple[list[Finding], bool]:
+    def _check_session(
+        self, session: dict, baseline_session: dict
+    ) -> tuple[list[Finding], bool, bool]:
         findings: list[Finding] = []
         evaluated = False
+        paired = False
         for step, call, baseline_call in _paired_calls(session, baseline_session):
             if baseline_call is None:
                 findings.append(
@@ -484,12 +538,13 @@ class SegmentDiff:
                     )
                 )
                 continue
+            paired = True
             finding = self._compare(session, call, baseline_call)
             if finding is None or finding.severity != SKIP:
                 evaluated = True
             if finding is not None:
                 findings.append(finding)
-        return findings, evaluated
+        return findings, evaluated, paired
 
     def _compare(self, session: dict, call: dict, baseline_call: dict) -> Finding | None:
         if not call.get("segments_complete", True):
@@ -575,13 +630,29 @@ class Metamorphic:
     def check(self, data: dict) -> list[Finding]:
         findings: list[Finding] = []
         evaluated_any = False
-        # strict=False for the same reason SegmentDiff uses it: a session
-        # count mismatch has no natural identity to name the extras by.
+        paired_any = False
         pairs = zip(data["sessions"], self.variant_data["sessions"], strict=False)
         for session, variant_session in pairs:
-            session_findings, session_evaluated = self._check_session(session, variant_session)
+            session_findings, session_evaluated, session_paired = self._check_session(
+                session, variant_session
+            )
             findings.extend(session_findings)
             evaluated_any = evaluated_any or session_evaluated
+            paired_any = paired_any or session_paired
+        gap = _session_count_gap(self.NAME, data, self.variant_data, "the variant")
+        if gap is not None:
+            findings.append(gap)
+        if not paired_any:
+            findings.append(
+                Finding(
+                    self.NAME,
+                    WARN,
+                    "no call could be paired with the variant, so the relation was never "
+                    "checked - is the variant the same scenario, recorded with one input "
+                    "perturbed?",
+                )
+            )
+            return findings
         if evaluated_any and not _kind_ever_present(self.segment, data, self.variant_data):
             findings.append(
                 Finding(
@@ -596,9 +667,12 @@ class Metamorphic:
             )
         return findings
 
-    def _check_session(self, session: dict, variant_session: dict) -> tuple[list[Finding], bool]:
+    def _check_session(
+        self, session: dict, variant_session: dict
+    ) -> tuple[list[Finding], bool, bool]:
         findings: list[Finding] = []
         evaluated = False
+        paired = False
         for step, call, variant_call in _paired_calls(session, variant_session):
             if variant_call is None:
                 findings.append(
@@ -621,14 +695,17 @@ class Metamorphic:
                     )
                 )
                 continue
-            finding = self._compare(session, call, variant_call)
+            paired = True
+            finding = self._compare(session, variant_session, call, variant_call)
             if finding is None or finding.severity != SKIP:
                 evaluated = True
             if finding is not None:
                 findings.append(finding)
-        return findings, evaluated
+        return findings, evaluated, paired
 
-    def _compare(self, session: dict, call: dict, variant_call: dict) -> Finding | None:
+    def _compare(
+        self, session: dict, variant_session: dict, call: dict, variant_call: dict
+    ) -> Finding | None:
         if not call.get("segments_complete", True):
             return Finding(
                 self.NAME,
@@ -651,17 +728,24 @@ class Metamorphic:
             # about. The run-level guard catches "absent everywhere".
             return None
         if not here or not there:
-            # Genuinely ambiguous - either the perturbation dropped the
-            # content entirely (a real INV violation) or that run simply was
-            # not tagged. Ambiguous evidence must not hard-gate (§6).
+            # Absent on one side only. Whether that is evidence depends on
+            # something the data actually records: `elements` lists every
+            # tag() the run declared, independent of whether it matched. A
+            # run that never declared the tag gives no visibility at all, so
+            # the absence proves nothing (WARN). A run that DID declare it
+            # and still has no such segment really is missing the content -
+            # exact evidence, so it falls through to the relation below and
+            # gates like any other difference.
+            missing_session = variant_session if not there else session
             missing_side = "the variant" if not there else "this run"
-            return Finding(
-                self.NAME,
-                WARN,
-                f"{_locate(session, call)}: segment {self.segment!r} is absent from "
-                f"{missing_side} but present in the other - ambiguous between the perturbation "
-                f"dropping it entirely and that run not being tagged, so not gated",
-            )
+            if not _tag_declared(missing_session, self.segment):
+                return Finding(
+                    self.NAME,
+                    WARN,
+                    f"{_locate(session, call)}: segment {self.segment!r} is absent from "
+                    f"{missing_side}, which never declared it as a tag - untagged, its chunks "
+                    f"are one joined string, so the absence proves nothing and is not gated",
+                )
         if self.relation == self.INVARIANT and here != there:
             only_here = Counter(here) - Counter(there)
             only_there = Counter(there) - Counter(here)

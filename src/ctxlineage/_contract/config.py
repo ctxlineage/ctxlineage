@@ -175,10 +175,15 @@ def _parse_metamorphic(entry: dict, where: str, base_dir: Path) -> Metamorphic:
         raise ConfigError(
             f"{where}: relation must be one of {', '.join(Metamorphic.RELATIONS)}, got {relation!r}"
         )
+    # Every cheap check first: reading and normalizing the variant run is by
+    # far the most expensive thing this parser does, and a config that is
+    # already invalid should not pay for it (nor report the file's problems
+    # ahead of its own).
+    segment = _string(entry, "segment", where)
     return Metamorphic(
         variant_data=_load_run(entry, "variant", where, base_dir),
         relation=relation,
-        segment=_string(entry, "segment", where),
+        segment=segment,
     )
 
 

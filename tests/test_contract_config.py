@@ -289,6 +289,23 @@ def test_metamorphic_missing_variant_file_is_a_config_error(tmp_path):
         config.load(_write(tmp_path, _MM.format("invariant")))
 
 
+def test_metamorphic_validates_its_own_keys_before_reading_the_variant(tmp_path):
+    """Cheap checks first: an already-invalid config should not pay to read
+    and normalize a whole JSONL, nor report that file's problems ahead of
+    its own. Pinned because the ordering is deliberate, not incidental."""
+    body = "[[assert.metamorphic]]\nvariant = 'nope.jsonl'\nrelation = 'invariant'\nsegment = 12\n"
+    with pytest.raises(ConfigError, match="segment must be a string"):
+        config.load(_write(tmp_path, body))
+
+
+def test_segment_diff_validates_its_own_keys_before_reading_the_baseline(tmp_path):
+    """Same ordering, and a deliberate change from the original: the
+    baseline's existence used to be checked before max_token_delta."""
+    body = "[[assert.segment_diff]]\nbaseline = 'nope.jsonl'\nmax_token_delta = -5\n"
+    with pytest.raises(ConfigError, match="max_token_delta must not be negative"):
+        config.load(_write(tmp_path, body))
+
+
 def test_metamorphic_variant_path_is_relative_to_the_config_file_not_cwd(tmp_path, monkeypatch):
     config_dir = tmp_path / "project"
     config_dir.mkdir()

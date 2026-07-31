@@ -152,3 +152,57 @@ same way (run `segment_diff`'s full test set unchanged before and after).
   as shipped **at the context level**, and record that the output-level
   half is deferred to the judge/statistical phase, with the issue link — so
   the doc stops reading as if the whole class were still open.
+
+## 5. Adversarial review, pre-merge: one blocker and one major, both fixed
+
+Reviewed before merge, as `segment_diff` was. Every finding below was
+reproduced independently before acting on it.
+
+- **Blocker — an empty or unrelated second run reported as a green pass.**
+  `zip(strict=False)` yields no pairs, so nothing is compared; and the
+  "never appeared" safety net was itself gated on having evaluated
+  something, which disarmed it in exactly the case it should catch.
+  Confirmed end to end: a present-but-empty variant produced
+  `All 1 assertion(s) ... passed - 0 warning(s), 0 skipped`, exit 0. That is
+  precisely the "unevaluated reads as green" failure this whole track exists
+  to prevent. **This was inherited from `segment_diff`** (it reproduces on
+  `main`), so the fix is applied to both: a WARN when the two runs hold
+  different session counts, and a WARN when no call could be paired at all.
+- **Major — the severity was inverted: dropping *one* chunk FAILed, dropping
+  *all* of them only warned.** The original code treated "absent on one
+  side" as ambiguous between a real total drop and an untagged run. That
+  reasoning was wrong, and the data proves it: `session["elements"]` records
+  every `tag()` a run *declared*, with its own `matched` flag, independent
+  of whether it matched anything. So `elements == []` means the run never
+  claimed to have the content (no visibility → WARN), while a declared tag
+  with no surviving segment means the content really is gone (exact
+  evidence → gates like any other difference). The rule's own headline bug —
+  a perturbation that silently drops chunks — was the case it refused to
+  gate. Fixed, with tests for both halves of the branch.
+- **Considered and deliberately not taken: demoting `partial` tag matches to
+  WARN.** The review argued that `metamorphic` hard-gates on best-effort
+  substring matching, and suggested demoting when any matched part is
+  `match: "partial"`. Checking `matching.py:95` first showed why that would
+  be wrong: `match` is `"exact"` only when a tag covers a segment's *entire*
+  content, so a chunk embedded in a larger `Context: …` message is **always**
+  `"partial"` — the normal, healthy case. Demoting on it would reduce
+  essentially every real RAG use to advisory, destroying the rule. The
+  underlying concern is real but narrower than claimed (a perturbation
+  confined to content the matcher cannot track — e.g. units below
+  `_MIN_UNIT_LEN`), and gating on tag-matched segments is the same bar
+  `grounded` already sets, so this is not a new tier violation. Recorded as
+  a documented limitation rather than a code change.
+- **Minor, fixed** — both parsers now run their own cheap validation before
+  reading and normalizing the second run, so an already-invalid config does
+  not pay for the file read nor report that file's problems ahead of its
+  own. This deliberately changes `segment_diff`'s previous error precedence
+  (baseline-existence used to be checked before `max_token_delta`), so both
+  orderings are now pinned by tests rather than left incidental.
+- **Verified clean by the review**: the `_paired_calls` extraction is
+  byte-identical to the old `SegmentDiff._check_session` in both findings
+  and their order (checked against `[A,B,A,A]` vs `[A,A,C]` and a
+  `None`-step mix, plus a brute force over all 3-call step combinations);
+  `s["content"]` cannot `KeyError`; duplicate, empty and whitespace chunks
+  all behave correctly; neither orphan branch misattributes its session.
+
+Full suite after the fixes: **548 passed**, lint clean.
