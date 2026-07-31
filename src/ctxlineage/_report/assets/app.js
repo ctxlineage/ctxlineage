@@ -74,11 +74,16 @@ const jsonTreeHtml = (value, depth = 0) => {
 };
 
 const stepOf = (c) => {
-  // label split (design decision 6): innermost user function names the call;
-  // the span name is grouping info (brackets, fn-card row), and the fallback
+  // label split (design decision 6, extended by #88): the span name is
+  // grouping info (spanNameOf - brackets, fn-card "span" row), never this.
+  // Per-call label preference: native capture's own call stack (real, exact)
+  // > an importer's derived per-call action (#88 - what THIS call did, not
+  // which turn it descends from) > the span name as a last-resort fallback
+  // (correct for a call with no discernible activity of its own, e.g. an
+  // episode's first call).
   const frame = c.call_stack && c.call_stack[0];
   const fn = frame ? frame.split(":")[1] : null;
-  return fn || c.step || null;
+  return fn || c.action || c.step || null;
 };
 const spanNameOf = (c) => c.step || null;
 
@@ -235,10 +240,14 @@ function renderCallsNav() {
       if (!callMatches(s, c)) return;
       const i = callIndex.get(c);
       const tok = c.usage ? fmt(c.usage.total_tokens) + " tok" : "–";
+      // #88/#91: the sidebar was the third place named alongside Overview and
+      // Chain - every row read only model+timestamp, so on an agent-loop
+      // session the only way to navigate was by token count. stepOf(c) is
+      // the same per-call label those two views already use.
       h += `<div class="callrow ${i === selCall ? "sel" : ""}" data-i="${i}">
         <span class="n">${i + 1}</span>
-        <span class="m"><span class="model">${esc(c.model)}</span>
-          <div class="sub">${esc((c.timestamp ?? "").slice(11, 19))} · ${tok}</div></span>
+        <span class="m"><span class="model">${esc(stepOf(c) ?? c.model)}</span>
+          <div class="sub">${esc(c.model)} · ${esc((c.timestamp ?? "").slice(11, 19))} · ${tok}</div></span>
         ${c.stream ? '<span class="badge stream">stream</span>' : ""}
         ${c.error ? '<span class="badge err">error</span>' : ""}</div>`;
     });

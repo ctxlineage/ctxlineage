@@ -224,6 +224,79 @@ def test_span_is_closed(tool_loop_events):
     assert {e["span_id"] for e in starts} == {e["span_id"] for e in ends}
 
 
+# --- per-call action label (#88): what a call did, not which span it's in --
+
+
+@pytest.fixture
+def multi_tool_loop_events():
+    return events_for("session_multi_tool_loop.jsonl")
+
+
+def test_agent_loop_calls_get_distinct_labels(multi_tool_loop_events):
+    """The bug #88 reports: every call in one span used to share the SAME
+    label (the human turn's sentence). Four calls, one span - the labels must
+    not all collapse to one value the way `step` (span-derived) still does."""
+    loop_calls = calls(multi_tool_loop_events)
+    assert len({c["span_id"] for c in loop_calls}) == 1, "fixture must share one span"
+    actions = [c["payload"].get("action") for c in loop_calls]
+    assert len(set(actions)) > 1, f"all four calls collapsed to one label: {actions}"
+
+
+def test_action_prefers_the_tool_result_that_fed_this_call(multi_tool_loop_events):
+    """Preference (1): a call fed a prior tool's result is labelled by that
+    result, even though it goes on to invoke a *different* tool of its own -
+    call 2 is fed Read's result and itself calls Edit; the label describes
+    what it received, not what it does next (per the issue's own preference
+    order, so labels chain call-to-call through an episode)."""
+    loop_calls = calls(multi_tool_loop_events)
+    assert loop_calls[1]["call_id"] == "msg_002"
+    assert loop_calls[1]["payload"]["action"] == "Read"
+
+
+def test_action_falls_back_to_own_tool_use_for_the_first_call(multi_tool_loop_events):
+    """Preference (2): the episode's first call has nothing feeding it yet, so
+    it is labelled by the tool call it itself emits."""
+    loop_calls = calls(multi_tool_loop_events)
+    assert loop_calls[0]["call_id"] == "msg_001"
+    assert loop_calls[0]["payload"]["action"] == "Read"
+
+
+def test_action_absent_when_no_tool_activity_either_side():
+    """Preference (3): a call with nothing feeding it and nothing of its own
+    to report (a plain question, a plain answer) carries no action at all -
+    the report frontend's fallback chain then reaches the span/human-turn
+    label, which IS the right label for a call like this."""
+    from ctxlineage._import.claude_code import _call_action
+
+    request = {"messages": [{"role": "user", "content": "what's 2+2?"}]}
+    blocks = [{"type": "text", "text": "4"}]
+    assert _call_action(request, blocks) is None
+
+
+def test_a_non_string_tool_name_falls_back_rather_than_flowing_through_raw():
+    """A malformed tool_use block (hand-edited transcript, or a future/
+    incompatible Claude Code version) whose `name` is not a string must not
+    flow through unstrung - `name or "tool"` alone lets a non-empty
+    non-string value (e.g. a dict) through, since it's truthy, and it would
+    render as "[object Object]" in the report instead of degrading."""
+    from ctxlineage._import.claude_code import _call_action
+
+    request = {"messages": [{"role": "user", "content": "do something"}]}
+    blocks = [{"type": "tool_use", "name": {"weird": "not-a-string"}}]
+    assert _call_action(request, blocks) == "tool"
+
+
+def test_multiple_tool_results_label_the_first_with_a_count():
+    """A call fed more than one tool result at once (a loop step that
+    processed several outputs together) gets a short chip, not a sentence
+    listing every one."""
+    from ctxlineage._import.claude_code import _action_label
+
+    assert _action_label(["Read"]) == "Read"
+    assert _action_label(["Read", "Bash"]) == "Read +1 more"
+    assert _action_label(["Read", "Bash", "Edit"]) == "Read +2 more"
+
+
 def test_injected_and_compact_records_do_not_open_spans():
     """isMeta and isCompactSummary user records are not human turns."""
     events = events_for("session_edge_cases.jsonl")
