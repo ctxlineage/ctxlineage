@@ -273,6 +273,19 @@ def test_action_absent_when_no_tool_activity_either_side():
     assert _call_action(request, blocks) is None
 
 
+def test_a_non_string_tool_name_falls_back_rather_than_flowing_through_raw():
+    """A malformed tool_use block (hand-edited transcript, or a future/
+    incompatible Claude Code version) whose `name` is not a string must not
+    flow through unstrung - `name or "tool"` alone lets a non-empty
+    non-string value (e.g. a dict) through, since it's truthy, and it would
+    render as "[object Object]" in the report instead of degrading."""
+    from ctxlineage._import.claude_code import _call_action
+
+    request = {"messages": [{"role": "user", "content": "do something"}]}
+    blocks = [{"type": "tool_use", "name": {"weird": "not-a-string"}}]
+    assert _call_action(request, blocks) == "tool"
+
+
 def test_multiple_tool_results_label_the_first_with_a_count():
     """A call fed more than one tool result at once (a loop step that
     processed several outputs together) gets a short chip, not a sentence

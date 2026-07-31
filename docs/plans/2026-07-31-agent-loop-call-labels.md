@@ -86,3 +86,21 @@ than dropping it.
   line.
 - Full suite **481 passed**, lint clean. Live Playwright pass (both views,
   both the fn card and the sidebar) — confirmed visually.
+
+## Adversarial review, pre-merge: one minor issue found and fixed
+
+An adversarial review found the design and its preference order sound
+(hand-traced through the fixture to confirm preference 1 correctly beats
+preference 2), but one minor defensive gap: `block.get("name") or "tool"`
+doesn't crash on a malformed `tool_use` block whose `name` is not a string
+(a hand-edited or corrupted transcript), but a non-empty non-string value
+(e.g. a dict) is truthy, so it flows through unstrung into `payload["action"]`
+and would render as `[object Object]` in the report instead of degrading to
+the same `"tool"` fallback used elsewhere. Fixed with a small `_tool_name(block)`
+helper that explicitly checks `isinstance(name, str)`, used at both call
+sites (`_tool_use_names` and `_call_action`'s output-tool-use scan). New
+test `test_a_non_string_tool_name_falls_back_rather_than_flowing_through_raw`
+pins it — confirmed it fails without the fix (the raw dict compares unequal
+to `"tool"`).
+
+Full suite after the fix: **482 passed**, lint clean.

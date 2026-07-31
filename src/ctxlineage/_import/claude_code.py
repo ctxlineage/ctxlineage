@@ -113,6 +113,19 @@ def _label(record: dict) -> str:
     return "turn"
 
 
+def _tool_name(block: dict) -> str:
+    """A tool_use block's name, defensively coerced to a string.
+
+    A well-formed transcript always carries a string here; a corrupted one
+    (hand-edited, or from a future/incompatible Claude Code version) might
+    not, and `name or "tool"` alone would let a non-empty non-string value
+    (e.g. a dict) through unstrung, rendering as "[object Object]" in the
+    report rather than degrading to the same "tool" fallback used elsewhere.
+    """
+    name = block.get("name")
+    return name if isinstance(name, str) and name else "tool"
+
+
 def _tool_use_names(messages: list[dict]) -> dict[str, str]:
     """Map a tool_use block's id -> its tool name, across a message chain.
 
@@ -127,7 +140,7 @@ def _tool_use_names(messages: list[dict]) -> dict[str, str]:
             continue
         for block in content:
             if isinstance(block, dict) and block.get("type") == "tool_use" and block.get("id"):
-                names[block["id"]] = block.get("name") or "tool"
+                names[block["id"]] = _tool_name(block)
     return names
 
 
@@ -163,9 +176,7 @@ def _call_action(request: dict, blocks: list[dict]) -> str | None:
                 by_id = _tool_use_names(messages)
                 return _action_label([by_id.get(i, "tool") for i in result_ids])
     out_names = [
-        b.get("name") or "tool"
-        for b in blocks
-        if isinstance(b, dict) and b.get("type") == "tool_use"
+        _tool_name(b) for b in blocks if isinstance(b, dict) and b.get("type") == "tool_use"
     ]
     return _action_label(out_names) if out_names else None
 
