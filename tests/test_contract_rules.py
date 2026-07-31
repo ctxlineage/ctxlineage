@@ -9,7 +9,7 @@ break if that shape drifts.
 from __future__ import annotations
 
 from ctxlineage._contract import runner
-from ctxlineage._contract.rules import Grounded, RequiresSegment, WindowBudget
+from ctxlineage._contract.rules import Grounded, RequiresSegment, SegmentDiff, WindowBudget
 from ctxlineage._report import normalize
 
 CHUNK = "ALPHA-CHUNK-CONTENT-ONE: ctxlineage records every call locally."
@@ -525,6 +525,150 @@ def test_requires_segment_when_model_unknown_model_is_skipped():
     assert len(findings) == 1
     assert findings[0].severity == "skip"
     assert "model unknown" in findings[0].message
+
+
+# --------------------------------------------------------------------------
+# segment_diff — regression/differential, positional pairing across two runs
+# --------------------------------------------------------------------------
+
+
+def test_segment_diff_passes_when_identical_to_the_baseline():
+    baseline = _data(_llm_call("b1", messages=[{"role": "user", "content": "hi there"}]))
+    current = _data(_llm_call("c1", messages=[{"role": "user", "content": "hi there"}]))
+    rule = SegmentDiff(baseline_data=baseline, max_token_delta=0, segment="user")
+    assert runner.run(current, [rule]) == []
+
+
+def test_segment_diff_fails_when_a_segment_grows_past_the_budget():
+    baseline = _data(_llm_call("b1", messages=[{"role": "user", "content": "hi"}]))
+    current = _data(
+        _llm_call(
+            "c1",
+            messages=[{"role": "user", "content": "hi " * 200}],
+        )
+    )
+    rule = SegmentDiff(baseline_data=baseline, max_token_delta=5, segment="user")
+    findings = runner.run(current, [rule])
+    assert len(findings) == 1
+    assert findings[0].severity == "fail"
+    assert "grew by" in findings[0].message
+    assert "c1" in findings[0].message
+
+
+def test_segment_diff_does_not_fail_on_shrinkage():
+    """A segment shrinking vs. the baseline is not this rule's concern - only
+    growth past the budget is (content loss is requires_segment's job)."""
+    baseline = _data(_llm_call("b1", messages=[{"role": "user", "content": "hi " * 200}]))
+    current = _data(_llm_call("c1", messages=[{"role": "user", "content": "hi"}]))
+    rule = SegmentDiff(baseline_data=baseline, max_token_delta=0, segment="user")
+    assert runner.run(current, [rule]) == []
+
+
+def test_segment_diff_whole_prompt_when_segment_is_none():
+    baseline = _data(
+        _llm_call(
+            "b1",
+            messages=[
+                {"role": "system", "content": "Be terse."},
+                {"role": "user", "content": "hi"},
+            ],
+        )
+    )
+    current = _data(
+        _llm_call(
+            "c1",
+            messages=[
+                {"role": "system", "content": "Be terse."},
+                {"role": "user", "content": "hi " * 200},
+            ],
+        )
+    )
+    rule = SegmentDiff(baseline_data=baseline, max_token_delta=5)
+    findings = runner.run(current, [rule])
+    assert len(findings) == 1
+    assert findings[0].severity == "fail"
+    assert "the prompt" in findings[0].message
+
+
+def test_segment_diff_warns_when_a_step_only_exists_in_current():
+    baseline = _data(_llm_call("b0", messages=[{"role": "user", "content": "hi"}]))
+    current = _data(
+        _llm_call(
+            "c0", messages=[{"role": "user", "content": "hi"}], ts="2026-07-17T00:00:00+00:00"
+        ),
+        _span_start("sp1", "new_step"),
+        _llm_call(
+            "c1",
+            span="sp1",
+            messages=[{"role": "user", "content": "hi"}],
+            ts="2026-07-17T00:01:00+00:00",
+        ),
+    )
+    rule = SegmentDiff(baseline_data=baseline, max_token_delta=1000, segment="user")
+    findings = runner.run(current, [rule])
+    assert len(findings) == 1
+    assert findings[0].severity == "warn"
+    assert "pairing gap" in findings[0].message
+    assert "c1" in findings[0].message
+
+
+def test_segment_diff_warns_when_a_step_only_exists_in_baseline():
+    baseline = _data(
+        _llm_call(
+            "b0", messages=[{"role": "user", "content": "hi"}], ts="2026-07-17T00:00:00+00:00"
+        ),
+        _span_start("sp1", "retired_step"),
+        _llm_call(
+            "b1",
+            span="sp1",
+            messages=[{"role": "user", "content": "hi"}],
+            ts="2026-07-17T00:01:00+00:00",
+        ),
+    )
+    current = _data(_llm_call("c0", messages=[{"role": "user", "content": "hi"}]))
+    rule = SegmentDiff(baseline_data=baseline, max_token_delta=1000, segment="user")
+    findings = runner.run(current, [rule])
+    assert len(findings) == 1
+    assert findings[0].severity == "warn"
+    assert "pairing gap" in findings[0].message
+    assert "b1" in findings[0].message
+
+
+def test_segment_diff_pairs_repeated_steps_by_occurrence_order():
+    """An agent loop's calls all share one span - pairing must match the Kth
+    occurrence to the Kth occurrence, not collapse them into one comparison."""
+    baseline = _data(
+        _span_start("sp1", "loop"),
+        _llm_call("b1", span="sp1", messages=[{"role": "user", "content": "step one"}]),
+        _llm_call("b2", span="sp1", messages=[{"role": "user", "content": "step two " * 50}]),
+    )
+    current = _data(
+        _span_start("sp1", "loop"),
+        _llm_call("c1", span="sp1", messages=[{"role": "user", "content": "step one"}]),
+        _llm_call("c2", span="sp1", messages=[{"role": "user", "content": "step two " * 50}]),
+    )
+    rule = SegmentDiff(baseline_data=baseline, max_token_delta=0, segment="user")
+    assert runner.run(current, [rule]) == []
+
+
+def test_segment_diff_skips_when_the_current_call_is_incomplete():
+    baseline = _data(_llm_call("b1", messages=[{"role": "user", "content": "hi"}]))
+    current = _data(_imported_call("c1", messages=[{"role": "user", "content": "hi"}]))
+    rule = SegmentDiff(baseline_data=baseline, max_token_delta=0, segment="user")
+    findings = runner.run(current, [rule])
+    assert len(findings) == 1
+    assert findings[0].severity == "skip"
+    assert "this run's call" in findings[0].message
+
+
+def test_segment_diff_skips_when_the_baseline_call_is_incomplete():
+    baseline = _data(_imported_call("b1", messages=[{"role": "user", "content": "hi"}]))
+    current = _data(_llm_call("c1", messages=[{"role": "user", "content": "hi"}]))
+    rule = SegmentDiff(baseline_data=baseline, max_token_delta=0, segment="user")
+    findings = runner.run(current, [rule])
+    assert len(findings) == 1
+    assert findings[0].severity == "skip"
+    assert "baseline call" in findings[0].message
 
 
 # --------------------------------------------------------------------------

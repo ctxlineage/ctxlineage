@@ -118,6 +118,9 @@ why "I don't like LLM-as-judge" resolves to "push the judge into a thin top laye
   presence, context-limit utilization thresholds. (Deterministic; available from capture alone.)
 - **Regression / differential:** record a golden run, re-run in CI, diff at the **segment** level.
   Fully deterministic when run **offline over recorded JSONL**. The natural first deliverable.
+  **Shipped in v0.2.2 as `segment_diff`** (#94b): positional pairing across two recorded runs
+  (session by position, call by span-name occurrence order), fails on segment growth past a
+  token-delta budget.
 - **Metamorphic / invariance (CheckList INV/DIR):** perturb `rag_chunks` order → answer should be
   invariant; drop a cited chunk → answer should change/degrade.
 - **Provenance / groundedness (the unique class):** every claim in the output should trace to a
