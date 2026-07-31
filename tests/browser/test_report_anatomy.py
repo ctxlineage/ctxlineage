@@ -40,9 +40,25 @@ def unaccounted(call: dict) -> int:
 
 
 def share_text(tok: int, total: int) -> str:
-    """Mirror of app.js's `${fmt(tok)} tok · ${pct.toFixed(0)}%`."""
+    """Mirror of app.js's `${fmt(tok)} tok · ${pct.toFixed(0)}%` (unaccounted-seg only)."""
     pct = Decimal(100 * tok) / Decimal(total)
     return f"{tok:,} tok · {pct.quantize(Decimal('1'), rounding=ROUND_HALF_UP)}%"
+
+
+def max_share_pct(segments: list[dict], denom: int) -> Decimal:
+    return max(Decimal(100 * g["tokens_est"]) / Decimal(denom) for g in segments)
+
+
+def prompt_share_text(tok: int, total: int, recovered_total: int | None = None) -> str:
+    """Mirror of app.js's #90 dual-basis segment/instructions share label -
+    real segment cards and the INSTRUCTIONS panel, not the unaccounted-seg
+    placeholder (which stays plain `share_text`, untouched by #90)."""
+    pct = Decimal(100 * tok) / Decimal(total)
+    text = f"{tok:,} tok · {pct.quantize(Decimal('1'), rounding=ROUND_HALF_UP)}% of prompt"
+    if recovered_total:
+        pct2 = Decimal(100 * tok) / Decimal(recovered_total)
+        text += f" · {pct2.quantize(Decimal('1'), rounding=ROUND_HALF_UP)}% of recovered"
+    return text
 
 
 def open_calls_view(open_report, html_text: str, index: int = 0):
@@ -80,13 +96,22 @@ def test_imported_segment_share_is_of_the_whole_prompt(open_report, imported_rep
     page = open_calls_view(open_report, imported_report, index=1)
     rendered = page.locator(".col .seg:not(.unaccounted-seg) .share").all_inner_texts()
 
-    honest = [share_text(g["tokens_est"], total) for g in call["segments"]]
+    # #90: at this coverage every segment's real-prompt share also grows a
+    # second, explicitly-labelled "of recovered" clause - it must not silently
+    # replace the honest of-prompt share the #64 contract established.
+    honest = [prompt_share_text(g["tokens_est"], total, seg_total(call)) for g in call["segments"]]
     buggy = [share_text(g["tokens_est"], seg_total(call)) for g in call["segments"]]
     assert rendered == honest
-    # guard the guard: the two formulas must actually disagree on this fixture,
-    # or the assertion above proves nothing.
+    # guard the guard: the two formulas must disagree by an order of magnitude
+    # on this fixture (the wrong, too-small seg_total denominator inflates
+    # every share), or the assertion above proves nothing. Not a hardcoded
+    # percentage - #90 changes segment token counts on this same fixture
+    # (a replayed assistant turn's stripped-thinking placeholder shrinks),
+    # so a fixed magic number goes stale for reasons unrelated to #64 itself.
+    buggy_max = max_share_pct(call["segments"], seg_total(call))
+    honest_max = max_share_pct(call["segments"], total)
     assert honest != buggy
-    assert "59%" in " ".join(buggy) and "59%" not in " ".join(rendered)
+    assert buggy_max > honest_max * 10
 
 
 def test_unaccounted_slice_is_drawn_to_scale(open_report, imported_report, imported_data):
@@ -142,7 +167,9 @@ def test_live_segment_shares_proportion_against_the_segments(open_report, live_r
     page = open_calls_view(open_report, live_report, index=index)
 
     rest = [g for g in call["segments"] if g["role"] != "system"]
-    expected = [share_text(g["tokens_est"], seg_total(call)) for g in rest]
+    # #90: total === segTotal for a complete-segments call, so no "of recovered"
+    # clause appears - only the "of prompt" wording is new here.
+    expected = [prompt_share_text(g["tokens_est"], seg_total(call)) for g in rest]
     assert page.locator(".col .seg:not(.unaccounted-seg) .share").all_inner_texts() == expected
 
 
@@ -166,5 +193,15 @@ def test_the_remainder_keys_on_the_declaration_not_a_token_ratio(
     assert page.locator(".provenance").count() == 0
 
     rendered = page.locator(".col .seg:not(.unaccounted-seg) .share").all_inner_texts()
-    assert rendered == [share_text(g["tokens_est"], seg_total(call)) for g in call["segments"]]
-    assert "59%" in " ".join(rendered), "live shares are of the segments, and stay so"
+    expected = [prompt_share_text(g["tokens_est"], seg_total(call)) for g in call["segments"]]
+    assert rendered == expected
+    # A buggy implementation that inferred the remainder from the wild
+    # reported-vs-segments ratio would suppress every share toward ~0%, same
+    # as the imported case. Prove at least one share stayed non-trivially
+    # large - i.e. genuinely against seg_total, not silently against the huge
+    # reported prompt_tokens. Not a hardcoded percentage: #90 changes segment
+    # token counts on this fixture (a stripped-thinking placeholder shrinks),
+    # so a fixed magic number goes stale for reasons unrelated to #63 itself.
+    assert max_share_pct(call["segments"], seg_total(call)) >= 20, (
+        "live shares are of the segments, and stay so"
+    )

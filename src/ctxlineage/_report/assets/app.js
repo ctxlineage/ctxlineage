@@ -224,6 +224,12 @@ function renderCallDetail() {
   // a 4-token segment of a 33k prompt renders as "50% of input".
   const unaccounted = c.segments_complete === false ? Math.max(inTok - segTotal, 0) : 0;
   const total = segTotal + unaccounted || 1;
+  // #90: at low recovery (an import can reconstruct <1% of the real prompt),
+  // every real segment rounds to "0% of prompt" and conveys nothing. Add a
+  // second, explicitly-labelled basis - share of what was actually recovered
+  // - only when the two bases differ; a live-capture call (unaccounted=0)
+  // sees no change, keeping #64's real-prompt basis as the honest top line.
+  const showRecovered = unaccounted > 0 && segTotal > 0;
   const pct = c.context_window ? (100 * inTok / c.context_window) : null;
   // role (not kind): a tagged system prompt stays in the fn card, with provenance
   const sys = c.segments.filter((g) => g.role === "system");
@@ -262,7 +268,8 @@ function renderCallDetail() {
     return `
     <div class="seg ${ws ? "ws" : ""}" style="border-left-color:${kindColor(g.kind)}">
       <div class="top"><span class="kind" style="color:${kindColor(g.kind)}">${esc(segLabel(g))}</span>
-        <span class="share">${fmt(g.tokens_est)} tok · ${(100 * g.tokens_est / total).toFixed(0)}%</span></div>
+        <span class="share">${fmt(g.tokens_est)} tok · ${(100 * g.tokens_est / total).toFixed(0)}% of prompt${
+          showRecovered ? ` · ${(100 * g.tokens_est / segTotal).toFixed(0)}% of recovered` : ""}</span></div>
       <div class="preview" dir="auto">${ws ? "(whitespace separator)" : esc(clip(g.content, 90))}</div>
       <div class="full" dir="auto">${ws ? "(whitespace only — separates the surrounding segments)" : esc(g.content)}</div>
     </div>`;
@@ -274,7 +281,8 @@ function renderCallDetail() {
       <div class="lbl"><span>instructions${
         (() => { const t = [...new Set(sys.filter((g) => g.tagged).map((g) => segLabel(g)))];
                  return t.length ? " — " + esc(t.join(" + ")) : ""; })()
-      }</span><span>${fmt(sysTok)} tok · ${(100 * sysTok / total).toFixed(0)}% of input</span></div>
+      }</span><span>${fmt(sysTok)} tok · ${(100 * sysTok / total).toFixed(0)}% of prompt${
+        showRecovered ? ` · ${(100 * sysTok / segTotal).toFixed(0)}% of recovered` : ""}</span></div>
       <div class="txt">${esc(sys.map((g) => g.content).join("\n\n"))}</div>
     </div>` : "";
 
@@ -575,7 +583,20 @@ function renderGraphView() {
   const g = buildGraph(s);
   const lit = graphFocus ? lineageClosure(g, graphFocus) : null;
 
-  const COLX = { source: 10, element: 260, call: 560 };
+  // Sources are always derived FROM elements (buildGraph), so zero elements
+  // means zero sources too - one condition collapses both empty columns.
+  // Untagged is the default experience for every user who hasn't adopted the
+  // span/tag API, not an import artifact - #89's own follow-up trial found
+  // this identical empty-column layout on a native, untagged capture too.
+  const hasElements = (s.elements || []).length > 0;
+  // call: 30, not 10, in the collapsed layout - span() and tag() are
+  // independent APIs, so a session can group calls with span() while
+  // tagging nothing (hasElements false with real span_ids). The span
+  // bracket below sits at `COLX.call - 16`; 10 would put it at negative x,
+  // bleeding past the SVG's own left edge (found by adversarial review).
+  const COLX = hasElements
+    ? { source: 10, element: 260, call: 560 }
+    : { source: 10, element: 10, call: 30 };
   const W = { source: 210, element: 250, call: 240 };
   const H = { source: 34, element: 46, call: 52 };
   const GAPY = 26;
@@ -684,14 +705,20 @@ function renderGraphView() {
   });
 
   const heads = `
-    <text style="fill:var(--muted)" font-size="11" letter-spacing=".08em" x="${COLX.source}" y="16">SOURCES</text>
-    <text style="fill:var(--muted)" font-size="11" letter-spacing=".08em" x="${COLX.element}" y="16">CONTEXT ELEMENTS</text>
+    ${hasElements ? `<text style="fill:var(--muted)" font-size="11" letter-spacing=".08em" x="${COLX.source}" y="16">SOURCES</text>
+    <text style="fill:var(--muted)" font-size="11" letter-spacing=".08em" x="${COLX.element}" y="16">CONTEXT ELEMENTS</text>` : ""}
     <text style="fill:var(--muted)" font-size="11" letter-spacing=".08em" x="${COLX.call}" y="16">LLM CALLS ↓ TIME</text>`;
 
-  const hint = (s.elements || []).length ? "" :
-    `<div class="note" style="margin:0 0 12px; max-width:560px">No tagged elements in this session —
-     wrap calls in <b>ctxlineage.span()</b> and <b>tag()</b> your chunks/prompts to see where
-     context comes from. Output→input flows are still shown below.</div>`;
+  // Untagged banner: actionable for a native-capture user (they can tag);
+  // honest, not actionable, for an imported session (tagging is structurally
+  // impossible there - the agent process can't call span()/tag()).
+  const allImported = s.calls.length > 0 && s.calls.every((c) => c.import);
+  const hint = hasElements ? "" : `<div class="note" style="margin:0 0 12px; max-width:560px">
+    This session has no tagged context elements, so the sources and provenance
+    columns are empty. ${allImported
+      ? "It was imported from an agent transcript, where tagging isn't possible — native <b>ctxlineage.init()</b> capture is what unlocks them."
+      : "Wrap calls in <b>ctxlineage.span()</b> and <b>tag()</b> your chunks/prompts to see where context comes from."
+    } Output→input flows are still shown below.</div>`;
   main.innerHTML = `<div id="graphwrap">${hint}
     <svg width="${laneBase + 110}" height="${height}" style="overflow:visible">${defs}${bh}${heads}${eh}${nh}</svg>
     <div class="note">click any node to trace its lineage (upstream + downstream); click again to clear.
