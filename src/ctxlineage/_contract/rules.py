@@ -12,6 +12,9 @@ Each rule declares the tier it can reach (§6) and the runner never overrides it
   warning: "required" means the absence itself is the failure).
 - `grounded` gates only where a `tag()` made the lineage exact, and demotes to
   advisory otherwise.
+- `segment_diff` gates a growth threshold between two recorded runs; a pairing
+  gap between them (a step present on only one side) has no content to
+  compare, so it warns rather than fails.
 """
 
 from __future__ import annotations
@@ -334,3 +337,158 @@ class RequiresSegment:
                         )
                     )
         return findings
+
+
+def _group_by_step(calls: list[dict]) -> dict:
+    """Group calls by their span name, preserving order within each group.
+
+    A call with no span (`step` is None) groups under the key `None` -
+    pairing still works because it is occurrence-order within a group, which
+    for an unnamed call is exactly ordinal position among the other unnamed
+    calls, with no special case needed.
+    """
+    groups: dict = {}
+    for call in calls:
+        groups.setdefault(call.get("step"), []).append(call)
+    return groups
+
+
+@dataclass(frozen=True)
+class SegmentDiff:
+    """Regression/differential testing (vision doc §8's "natural first
+    deliverable"): compare this run's segment token counts against a
+    recorded golden run, call for call, and fail when one grew past a
+    tolerance.
+
+    There is no cross-run call identity in this codebase, so pairing is
+    positional: sessions pair by position (Nth vs Nth, both already sorted by
+    start time); calls within a paired session pair by `step` (the span
+    name), matching the Kth occurrence of a step in this run to the Kth
+    occurrence of the same step in the baseline (`_group_by_step`). A step
+    present on only one side is a pairing gap, not a content regression, so
+    it warns rather than fails - the same posture `Grounded` takes on an
+    unmatched tag.
+
+    Positional session pairing has a silent failure mode worth naming
+    explicitly rather than only implying: when session *counts* match but
+    *identities* differ (a new session type inserted ahead of an old one,
+    same-second sessions reordering under timestamp jitter), this compares
+    unrelated sessions with no warning at all - unlike a count mismatch or a
+    per-call pairing gap, which do surface. A `ctxlineage.toml` baseline is
+    only trustworthy against a pipeline whose session shape hasn't changed
+    since it was recorded.
+    """
+
+    baseline_data: dict
+    max_token_delta: float
+    segment: str | None = None
+
+    NAME = "segment_diff"
+
+    def check(self, data: dict) -> list[Finding]:
+        findings: list[Finding] = []
+        evaluated_any = False
+        # strict=False: a session count mismatch has no natural identity to
+        # name the extras by - the extra sessions on the longer side are
+        # simply not compared, not an error.
+        pairs = zip(data["sessions"], self.baseline_data["sessions"], strict=False)
+        for session, baseline_session in pairs:
+            session_findings, session_evaluated = self._check_session(session, baseline_session)
+            findings.extend(session_findings)
+            evaluated_any = evaluated_any or session_evaluated
+        # Mirrors WindowBudget's typo guard: a segment kind that never
+        # appears on either side of the diff is indistinguishable, by the
+        # math alone, from "genuinely never grew" - delta is always 0 either
+        # way. Warn rather than let a typo read as a permanently-passing gate.
+        if self.segment and evaluated_any and not self._segment_ever_present(data):
+            findings.append(
+                Finding(
+                    self.NAME,
+                    WARN,
+                    f"segment {self.segment!r} never appeared in any call in this run or the "
+                    f"baseline, so nothing was compared - check the name (kinds are "
+                    f"{', '.join(KNOWN_SEGMENT_KINDS)}, or a tag name)",
+                )
+            )
+        return findings
+
+    def _check_session(self, session: dict, baseline_session: dict) -> tuple[list[Finding], bool]:
+        findings: list[Finding] = []
+        evaluated = False
+        current_groups = _group_by_step(session["calls"])
+        baseline_groups = _group_by_step(baseline_session["calls"])
+        for step, calls in current_groups.items():
+            baseline_calls = baseline_groups.get(step, [])
+            for index, call in enumerate(calls):
+                if index >= len(baseline_calls):
+                    findings.append(
+                        Finding(
+                            self.NAME,
+                            WARN,
+                            f"{_locate(session, call)}: no baseline call to compare against "
+                            f"(step {step!r}) - pairing gap, not a content regression",
+                        )
+                    )
+                    continue
+                finding = self._compare(session, call, baseline_calls[index])
+                if finding is None or finding.severity != SKIP:
+                    evaluated = True
+                if finding is not None:
+                    findings.append(finding)
+        for step, baseline_calls in baseline_groups.items():
+            calls = current_groups.get(step, [])
+            for orphan in baseline_calls[len(calls) :]:
+                findings.append(
+                    Finding(
+                        self.NAME,
+                        WARN,
+                        f"{_locate(baseline_session, orphan)}: baseline call has no "
+                        f"counterpart in this run for step {step!r} - pairing gap, not a "
+                        f"content regression",
+                    )
+                )
+        return findings, evaluated
+
+    def _segment_ever_present(self, data: dict) -> bool:
+        for dataset in (data, self.baseline_data):
+            for session in dataset["sessions"]:
+                for call in session["calls"]:
+                    if any(s.get("kind") == self.segment for s in call["segments"]):
+                        return True
+        return False
+
+    def _compare(self, session: dict, call: dict, baseline_call: dict) -> Finding | None:
+        if not call.get("segments_complete", True):
+            return Finding(
+                self.NAME,
+                SKIP,
+                f"{_locate(session, call)}: {self._subject()} diff not evaluated - this run's "
+                f"call is {_incomplete_reason(call)}",
+            )
+        if not baseline_call.get("segments_complete", True):
+            return Finding(
+                self.NAME,
+                SKIP,
+                f"{_locate(session, call)}: {self._subject()} diff not evaluated - the "
+                f"baseline call is {_incomplete_reason(baseline_call)}",
+            )
+        current_tokens = self._tokens(call)
+        baseline_tokens = self._tokens(baseline_call)
+        delta = current_tokens - baseline_tokens
+        if delta > self.max_token_delta:
+            return Finding(
+                self.NAME,
+                FAIL,
+                f"{_locate(session, call)}: {self._subject()} grew by {delta:,} tokens vs "
+                f"baseline ({baseline_tokens:,} -> {current_tokens:,}), over the "
+                f"{self.max_token_delta:,} budget",
+            )
+        return None
+
+    def _subject(self) -> str:
+        return f"segment {self.segment!r}" if self.segment else "the prompt"
+
+    def _tokens(self, call: dict) -> int:
+        if self.segment:
+            return sum(s["tokens_est"] for s in call["segments"] if s.get("kind") == self.segment)
+        return call["input_tokens_est"]

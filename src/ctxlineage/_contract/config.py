@@ -21,7 +21,8 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-from ctxlineage._contract.rules import Grounded, RequiresSegment, WindowBudget
+from ctxlineage._contract.rules import Grounded, RequiresSegment, SegmentDiff, WindowBudget
+from ctxlineage._report.normalize import build_report_data, load_events
 
 if sys.version_info >= (3, 11):
     import tomllib
@@ -45,10 +46,10 @@ def load(path) -> list:
         raw = tomllib.loads(path.read_text(encoding="utf-8"))
     except tomllib.TOMLDecodeError as exc:
         raise ConfigError(f"{path} is not valid TOML: {exc}") from exc
-    return parse(raw, source=str(path))
+    return parse(raw, source=str(path), base_dir=path.resolve().parent)
 
 
-def parse(raw: dict, source: str = "ctxlineage.toml") -> list:
+def parse(raw: dict, source: str = "ctxlineage.toml", base_dir: Path | None = None) -> list:
     section = raw.get("assert")
     if section is None:
         raise ConfigError(
@@ -75,7 +76,14 @@ def parse(raw: dict, source: str = "ctxlineage.toml") -> list:
             where = f"{source}: assert.{name}[{index}]"
             if not isinstance(entry, dict):
                 raise ConfigError(f"{where}: must be a table")
-            rules.append(parser(entry, where))
+            # segment_diff is the one rule that resolves a path (its baseline
+            # JSONL) - relative to this config file's own directory, not the
+            # process CWD - so it alone needs base_dir; every other parser
+            # stays a plain (entry, where) function.
+            if name == SegmentDiff.NAME:
+                rules.append(parser(entry, where, base_dir or Path(".")))
+            else:
+                rules.append(parser(entry, where))
     if not rules:
         raise ConfigError(f"{source}: no assertions configured under [assert]")
     return rules
@@ -138,10 +146,31 @@ def _parse_requires_segment(entry: dict, where: str) -> RequiresSegment:
     return RequiresSegment(kind=kind, when_model=when_model)
 
 
+def _parse_segment_diff(entry: dict, where: str, base_dir: Path) -> SegmentDiff:
+    _reject_unknown(entry, {"baseline", "max_token_delta", "segment"}, where)
+    if "baseline" not in entry:
+        raise ConfigError(f"{where}: baseline is required")
+    if "max_token_delta" not in entry:
+        raise ConfigError(f"{where}: max_token_delta is required")
+    baseline_path = base_dir / _string(entry, "baseline", where)
+    if not baseline_path.exists():
+        raise ConfigError(f"{where}: baseline not found: {baseline_path}")
+    max_token_delta = _number(entry, "max_token_delta", where)
+    if max_token_delta < 0:
+        raise ConfigError(f"{where}: max_token_delta must not be negative, got {max_token_delta!r}")
+    segment = _string(entry, "segment", where) if "segment" in entry else None
+    events, _ = load_events(baseline_path)
+    baseline_data = build_report_data(events)
+    return SegmentDiff(
+        baseline_data=baseline_data, max_token_delta=max_token_delta, segment=segment
+    )
+
+
 # Built-in relations only. A plugin hook (§12) would register here; nothing
 # third-party loads in this slice.
 _PARSERS = {
     WindowBudget.NAME: _parse_window_budget,
     Grounded.NAME: _parse_grounded,
     RequiresSegment.NAME: _parse_requires_segment,
+    SegmentDiff.NAME: _parse_segment_diff,
 }

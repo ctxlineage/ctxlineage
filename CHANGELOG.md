@@ -18,6 +18,17 @@ land in minor versions).
   declared partial skips rather than fails (the same #63 reasoning
   `window_budget`'s segment form already uses — absence there is ambiguous
   between "never sent" and "not preserved by the transcript") (#94).
+- **`segment_diff`** — a new `ctxlineage test` rule comparing this run's
+  segment token counts against a previously-recorded baseline run, call for
+  call, and failing when a segment grows past a token-delta budget. This is
+  the "regression/differential" assertion class the contract-testing vision
+  doc named as its own natural first deliverable, now shipped. Pairing is
+  positional (no cross-run call identity exists otherwise): sessions by
+  position, calls within a session by span-name occurrence order. A call
+  with no counterpart on the other side warns rather than fails — a pairing
+  gap is not itself a content regression. `baseline = "..."` resolves
+  relative to the `ctxlineage.toml` file's own directory, not the process's
+  working directory (#94).
 
 ## [0.2.1] - 2026-07-20
 

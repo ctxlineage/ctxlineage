@@ -104,6 +104,11 @@ warn_dead = true             # advisory: flag chunks nothing downstream consumed
 [[assert.requires_segment]]
 kind = "system"              # every call must carry a system segment
 when_model = "gpt-*"         # optional glob: scope to matching models only
+
+[[assert.segment_diff]]
+baseline = "baselines/golden.jsonl"  # a prior recorded run, resolved relative to this file
+max_token_delta = 200         # a segment may grow by at most this many tokens vs. baseline
+segment = "tool_defs"         # optional; omitted = the whole prompt
 ```
 
 ```bash
@@ -117,6 +122,7 @@ your build:
 | --- | --- | --- |
 | `window_budget` | any call, **no tagging needed** | token counts and the model window are deterministic from capture alone |
 | `requires_segment` | any call, **no tagging needed** | segment presence is deterministic from capture alone — this asserts *whether*, not *how much* |
+| `segment_diff` | any call, **no tagging needed** | comparing two recorded runs' own token counts is deterministic from capture alone |
 | `grounded` presence | tagged content only | the `tag()` is your declaration, so "it never reached the window" is exact |
 | `grounded` dead-context | nothing — **advisory** | "nothing downstream used it" is read off *inferred* lineage edges |
 
@@ -127,6 +133,17 @@ skipped or warned — never silently passed.
 
 `segment` selects on the kinds the pipeline really produces — `system`, `user`,
 `assistant`, `tool`, `tool_defs` — or any tag name.
+
+`segment_diff` pairs calls across the two runs positionally — by session
+order, then by span name within a session — since there is no other stable
+identity to match on. A call whose pairing can't be found (the pipeline's
+shape changed since the baseline was recorded) warns rather than fails: a
+missing counterpart is not itself a content regression. Positional session
+pairing only warns when session **counts** differ; if counts match but a
+session's identity has quietly changed (a new session type inserted ahead
+of an old one, same-second sessions reordering), the diff compares
+unrelated sessions with no warning — a baseline is only trustworthy against
+a pipeline whose session shape hasn't changed since it was recorded.
 
 ### Try it in 30 seconds (no API key)
 

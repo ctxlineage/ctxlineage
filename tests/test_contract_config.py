@@ -1,3 +1,5 @@
+import json
+
 import pytest
 
 from ctxlineage._contract import config
@@ -139,3 +141,96 @@ def test_requires_segment_rejects_unknown_key(tmp_path):
 def test_requires_segment_kind_must_not_be_empty(tmp_path):
     with pytest.raises(ConfigError, match="kind must not be empty"):
         config.load(_write(tmp_path, "[[assert.requires_segment]]\nkind = ''\n"))
+
+
+# --------------------------------------------------------------------------
+# segment_diff
+# --------------------------------------------------------------------------
+
+
+def _write_baseline(dir_path, name="baseline.jsonl", call_id="b1"):
+    event = {
+        "schema_version": 1,
+        "event_type": "llm_call",
+        "session_id": "s1",
+        "span_id": None,
+        "call_id": call_id,
+        "timestamp": "2026-07-17T00:00:00+00:00",
+        "payload": {
+            "provider": "openai",
+            "api": "chat.completions",
+            "request": {"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "hi"}]},
+            "stream": False,
+        },
+    }
+    path = dir_path / name
+    path.write_text(json.dumps(event) + "\n", encoding="utf-8")
+    return path
+
+
+def test_segment_diff_loads(tmp_path):
+    _write_baseline(tmp_path)
+    body = "[[assert.segment_diff]]\nbaseline = 'baseline.jsonl'\nmax_token_delta = 50\n"
+    (rule,) = config.load(_write(tmp_path, body))
+    assert rule.max_token_delta == 50
+    assert rule.segment is None
+    assert [c["id"] for s in rule.baseline_data["sessions"] for c in s["calls"]] == ["b1"]
+
+
+def test_segment_diff_segment_loads(tmp_path):
+    _write_baseline(tmp_path)
+    body = (
+        "[[assert.segment_diff]]\nbaseline = 'baseline.jsonl'\nmax_token_delta = 50\n"
+        "segment = 'tool_defs'\n"
+    )
+    (rule,) = config.load(_write(tmp_path, body))
+    assert rule.segment == "tool_defs"
+
+
+def test_segment_diff_baseline_is_required(tmp_path):
+    with pytest.raises(ConfigError, match="baseline is required"):
+        config.load(_write(tmp_path, "[[assert.segment_diff]]\nmax_token_delta = 50\n"))
+
+
+def test_segment_diff_max_token_delta_is_required(tmp_path):
+    _write_baseline(tmp_path)
+    body = "[[assert.segment_diff]]\nbaseline = 'baseline.jsonl'\n"
+    with pytest.raises(ConfigError, match="max_token_delta is required"):
+        config.load(_write(tmp_path, body))
+
+
+def test_segment_diff_rejects_a_negative_max_token_delta(tmp_path):
+    _write_baseline(tmp_path)
+    body = "[[assert.segment_diff]]\nbaseline = 'baseline.jsonl'\nmax_token_delta = -1\n"
+    with pytest.raises(ConfigError, match="max_token_delta must not be negative"):
+        config.load(_write(tmp_path, body))
+
+
+def test_segment_diff_rejects_unknown_key(tmp_path):
+    _write_baseline(tmp_path)
+    body = "[[assert.segment_diff]]\nbaseline = 'baseline.jsonl'\nmax_token_delta = 1\nfoo = 1\n"
+    with pytest.raises(ConfigError, match="unknown key 'foo'"):
+        config.load(_write(tmp_path, body))
+
+
+def test_segment_diff_missing_baseline_file_is_a_config_error(tmp_path):
+    body = "[[assert.segment_diff]]\nbaseline = 'nope.jsonl'\nmax_token_delta = 1\n"
+    with pytest.raises(ConfigError, match="baseline not found"):
+        config.load(_write(tmp_path, body))
+
+
+def test_segment_diff_baseline_path_is_relative_to_the_config_file_not_cwd(tmp_path, monkeypatch):
+    """No existing rule takes a path - this pins the convention deliberately:
+    resolution follows the TOML file's own directory, never the process CWD."""
+    config_dir = tmp_path / "project"
+    config_dir.mkdir()
+    _write_baseline(config_dir)
+    body = "[[assert.segment_diff]]\nbaseline = 'baseline.jsonl'\nmax_token_delta = 50\n"
+    config_path = _write(config_dir, body)
+
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    monkeypatch.chdir(elsewhere)
+
+    (rule,) = config.load(config_path)
+    assert [c["id"] for s in rule.baseline_data["sessions"] for c in s["calls"]] == ["b1"]
