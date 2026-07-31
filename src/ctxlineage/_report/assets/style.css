@@ -123,18 +123,43 @@ main { padding: 20px 24px 40px; overflow-y: auto; position: relative; }
                   color: var(--teal); margin-bottom: 4px; display: flex;
                   justify-content: space-between; }
 .fn .instr .lbl span:last-child { color: var(--fn-muted); text-transform: none; }
+.fn .instr .toggle { display: inline-block; margin-left: 6px; color: var(--teal);
+                      transition: transform .12s; }
+.fn .instr.open .toggle { transform: rotate(90deg); }
 .fn .instr .txt { font: 11.5px/1.5 ui-monospace, monospace; color: var(--fn-text);
                   opacity: .85; max-height: 42px; overflow: hidden; white-space: pre-wrap; }
 .fn .instr.open .txt { max-height: 300px; overflow-y: auto; }
 .out { background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
        padding: 10px 12px; border-left: 4px solid var(--assistant); }
+.out:not(.error) { cursor: pointer; }
 .out.error { border-color: var(--err); border-left-color: var(--err); }
 .out .head { display: flex; justify-content: space-between; font-size: 12px;
              color: var(--muted); margin-bottom: 6px; }
 .out .head .ol { color: var(--assistant); font-weight: 700; }
+.out .head .toggle { display: inline-block; margin-left: 6px; color: var(--assistant);
+                      transition: transform .12s; }
+.out.open .head .toggle { transform: rotate(90deg); }
 .out .body { font-size: 12.5px; white-space: pre-wrap; word-break: break-word;
              max-height: 300px; overflow-y: auto; }
+.out.open .body { max-height: none; overflow: visible; }
 .out.error .body { color: var(--err); font-weight: 600; }
+
+/* #92: a collapsed tree for JSON segment/output content — shape at a glance
+   ("a session-analysis object with 6 fields") instead of a wall of quotes and
+   braces. Nested <details> - native disclosure, no click-handler wiring. */
+.jkind { color: var(--muted); font-style: italic; font-weight: 400; }
+.jtree, .jchildren { font: 12px/1.6 ui-monospace, monospace; }
+.jrow { padding: 1px 0; }
+.jkey { color: var(--teal); font-weight: 600; }
+.jval { color: var(--muted); }
+.jempty { color: var(--muted); font-style: italic; }
+.jbranch { margin: 0; }
+.jbranch > summary { cursor: pointer; list-style: none; }
+.jbranch > summary::-webkit-details-marker { display: none; }
+.jbranch > summary::before { content: "▸ "; color: var(--muted); }
+.jbranch[open] > summary::before { content: "▾ "; }
+.jbranch > .jchildren { margin-left: 16px; padding-left: 8px;
+                        border-left: 1px dashed var(--border); }
 .stackline { margin-top: 18px; font-size: 11.5px; color: var(--muted); }
 
 /* chain view */

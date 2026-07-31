@@ -29,8 +29,18 @@ land in minor versions).
   gap is not itself a content regression. `baseline = "..."` resolves
   relative to the `ctxlineage.toml` file's own directory, not the process's
   working directory (#94).
+- The Calls view renders a JSON segment or output body as a collapsed,
+  expandable tree — top-level keys visible at a glance, nested branches
+  opened on click — instead of an undifferentiated wall of quotes and
+  braces. Non-JSON content is unaffected (#92).
 
 ### Fixed
+- The INSTRUCTIONS panel and the output body now show a visible `▸`/`▾`
+  toggle affordance. The panel already expanded on click; nothing on the
+  page said so. The output body gained an expand toggle it previously
+  lacked entirely, removing its height cap on click instead of capping long
+  output at a fixed, non-obvious 300px. Reopening a panel after scrolling it
+  now returns to the top instead of silently resuming mid-content (#92).
 - The Graph view no longer renders a mostly-blank three-column layout on a
   session with no tagged elements — a **default experience for every v0.2.x
   user who hasn't adopted `span()`/`tag()`**, not an import-only artifact.

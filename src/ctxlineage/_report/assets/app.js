@@ -33,6 +33,46 @@ const clip = (t, n) => {
   if (last >= 0xd800 && last <= 0xdbff) s = s.slice(0, -1);  // no torn emoji
   return s;
 };
+/* ---------- #92: structure-aware rendering for JSON segment/output bodies ----------
+   A wall of quotes and braces shows nothing at a glance; a collapsed tree does.
+   Only the top-level content is ever JSON.parse'd — a string value that merely
+   looks like JSON is rendered as a plain (escaped) string, never re-parsed, so
+   this cannot recurse into content the app never declared as structured. */
+const parseJsonMaybe = (text) => {
+  let value;
+  try { value = JSON.parse(text); } catch { return null; }
+  return value !== null && typeof value === "object" ? value : null;  // a bare scalar isn't worth a tree
+};
+const jsonKind = (v) => Array.isArray(v)
+  ? `array · ${v.length} item${v.length === 1 ? "" : "s"}`
+  : `object · ${Object.keys(v).length} key${Object.keys(v).length === 1 ? "" : "s"}`;
+const jsonLeafText = (v) => {
+  if (v === null) return "null";
+  if (typeof v !== "string") return String(v);
+  return v.length > 60 ? `"${clip(v, 60)}…"` : `"${v}"`;
+};
+// A parsed value can nest arbitrarily deep (a hostile or just very large RAG
+// chunk, a deeply nested tool-call trace) - JSON.parse succeeding says
+// nothing about whether the walk below can afford to recurse that deep.
+// Found by adversarial review: an ~2000-level-deep array blew the call stack
+// mid-render, leaving #main showing stale content with no visible error.
+// This cap is far above any realistic payload's real nesting.
+const JSON_TREE_MAX_DEPTH = 24;
+const jsonTreeHtml = (value, depth = 0) => {
+  const entries = Array.isArray(value) ? value.map((v, i) => [String(i), v]) : Object.entries(value);
+  if (!entries.length) return `<div class="jempty">${Array.isArray(value) ? "[]" : "{}"}</div>`;
+  if (depth >= JSON_TREE_MAX_DEPTH) {
+    return `<div class="jempty">nested deeper than ${JSON_TREE_MAX_DEPTH} levels, not expanded further</div>`;
+  }
+  return `<div class="jchildren">${entries.map(([k, v]) => {
+    const branch = v !== null && typeof v === "object";
+    const kv = `<span class="jkey">${esc(k)}</span>: <span class="jval">${esc(branch ? jsonKind(v) : jsonLeafText(v))}</span>`;
+    return branch
+      ? `<details class="jrow jbranch"><summary>${kv}</summary>${jsonTreeHtml(v, depth + 1)}</details>`
+      : `<div class="jrow">${kv}</div>`;
+  }).join("")}</div>`;
+};
+
 const stepOf = (c) => {
   // label split (design decision 6): innermost user function names the call;
   // the span name is grouping info (brackets, fn-card row), and the fallback
@@ -265,13 +305,20 @@ function renderCallDetail() {
 
   const segs = rest.map((g) => {
     const ws = !g.content.trim();
+    const parsed = ws ? null : parseJsonMaybe(g.content);
+    // Structure at a glance in the collapsed preview too - "json object · 6
+    // keys" answers "what is this?" without reading a character of it.
+    const preview = ws ? "(whitespace separator)"
+      : parsed ? `<span class="jkind">${esc(jsonKind(parsed))}</span>` : esc(clip(g.content, 90));
+    const full = ws ? "(whitespace only — separates the surrounding segments)"
+      : parsed ? jsonTreeHtml(parsed) : esc(g.content);
     return `
     <div class="seg ${ws ? "ws" : ""}" style="border-left-color:${kindColor(g.kind)}">
       <div class="top"><span class="kind" style="color:${kindColor(g.kind)}">${esc(segLabel(g))}</span>
         <span class="share">${fmt(g.tokens_est)} tok · ${(100 * g.tokens_est / total).toFixed(0)}% of prompt${
           showRecovered ? ` · ${(100 * g.tokens_est / segTotal).toFixed(0)}% of recovered` : ""}</span></div>
-      <div class="preview" dir="auto">${ws ? "(whitespace separator)" : esc(clip(g.content, 90))}</div>
-      <div class="full" dir="auto">${ws ? "(whitespace only — separates the surrounding segments)" : esc(g.content)}</div>
+      <div class="preview" dir="auto">${preview}</div>
+      <div class="full" dir="auto">${full}</div>
     </div>`;
   }).join("");
 
@@ -282,7 +329,8 @@ function renderCallDetail() {
         (() => { const t = [...new Set(sys.filter((g) => g.tagged).map((g) => segLabel(g)))];
                  return t.length ? " — " + esc(t.join(" + ")) : ""; })()
       }</span><span>${fmt(sysTok)} tok · ${(100 * sysTok / total).toFixed(0)}% of prompt${
-        showRecovered ? ` · ${(100 * sysTok / segTotal).toFixed(0)}% of recovered` : ""}</span></div>
+        showRecovered ? ` · ${(100 * sysTok / segTotal).toFixed(0)}% of recovered` : ""}
+        <b class="toggle" title="show all / show less">▸</b></span></div>
       <div class="txt">${esc(sys.map((g) => g.content).join("\n\n"))}</div>
     </div>` : "";
 
@@ -298,12 +346,17 @@ function renderCallDetail() {
       ${instr}
     </div>`;
 
+  const outContent = c.output ? c.output.content : "";
+  const outParsed = c.error ? null : parseJsonMaybe(outContent);
   const out = c.error
     ? `<div class="out error"><div class="head"><span>error</span><span>${esc(c.error.type)}</span></div>
        <div class="body">${esc(c.error.message)}</div></div>`
-    : `<div class="out"><div class="head"><span class="ol">llm output</span>
-         <span>${c.usage ? fmt(c.usage.completion_tokens) + " tok · " : ""}${esc(c.output && c.output.finish_reason || "")}</span></div>
-       <div class="body" dir="auto">${esc(c.output ? c.output.content : "")}</div></div>`;
+    : `<div class="out" id="outwrap"><div class="head"><span class="ol">llm output${
+         outParsed ? ` · <span class="jkind">${esc(jsonKind(outParsed))}</span>` : ""
+       }</span>
+         <span>${c.usage ? fmt(c.usage.completion_tokens) + " tok · " : ""}${esc(c.output && c.output.finish_reason || "")}
+         <b class="toggle" title="show all / show less">▸</b></span></div>
+       <div class="body" dir="auto">${outParsed ? jsonTreeHtml(outParsed) : esc(outContent)}</div></div>`;
 
   main.innerHTML = `
     <div class="callhead"><h2>call ${selCall + 1}</h2>
@@ -324,10 +377,26 @@ function renderCallDetail() {
       <div class="col"><h4>output</h4>${out}</div>
     </div>
     ${c.call_stack.length ? `<div class="stackline">called from <code>${c.call_stack.map(esc).join(" ← ")}</code></div>` : ""}`;
+  // A toggle just flips a CSS class - it doesn't re-render, so a scrolled
+  // panel that's closed and reopened would otherwise still show wherever the
+  // reader last scrolled it, not the head of the content.
+  const toggleOpen = (el, scrollSelector, event) => {
+    // A click on a nested JSON-tree <details>/<summary> (#92) bubbles up to
+    // this container's own listener - let the native disclosure toggle be
+    // independent, or expanding one JSON key would also close the whole
+    // segment/output it lives in.
+    if (event && event.target.closest("details, summary")) return;
+    const opening = !el.classList.contains("open");
+    el.classList.toggle("open");
+    const target = opening && el.querySelector(scrollSelector);
+    if (target) target.scrollTop = 0;
+  };
   main.querySelectorAll(".seg").forEach((el) =>
-    el.addEventListener("click", () => el.classList.toggle("open")));
+    el.addEventListener("click", (e) => toggleOpen(el, ".full", e)));
   const instrEl = document.getElementById("instr");
-  if (instrEl) instrEl.addEventListener("click", () => instrEl.classList.toggle("open"));
+  if (instrEl) instrEl.addEventListener("click", (e) => toggleOpen(instrEl, ".txt", e));
+  const outEl = document.getElementById("outwrap");
+  if (outEl) outEl.addEventListener("click", (e) => toggleOpen(outEl, ".body", e));
 }
 
 /* ================= chain view (session flow) ================= */
