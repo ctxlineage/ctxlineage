@@ -465,8 +465,10 @@ function chainNodeHtml(sess, c, i, targets, downstream) {
      so incoming edges can always enter from the free gap above the row */
   const entries = [...agg.values()].sort(
     (a, b) => (a.kind === "assistant" ? 0 : 1) - (b.kind === "assistant" ? 0 : 1));
+  // data-kind (#93): lets drawEdges() target the chip the match actually
+  // landed in, instead of always assuming the assistant/"fed" chip.
   const chips = entries.map((a) =>
-    `<span class="chip ${a.kind === "assistant" ? "fed" : ""}">
+    `<span class="chip ${a.kind === "assistant" ? "fed" : ""}" data-kind="${esc(a.kind)}">
        <i style="background:${kindColor(a.kind)}"></i>${esc(a.label)}${a.n > 1 ? " ×" + a.n : ""} · ${fmt(a.tok)}</span>`).join("");
   const minibar = c.segments.map((g) =>
     `<i style="width:${(100 * g.tokens_est / total).toFixed(2)}%;background:${kindColor(g.kind)}"></i>`).join("");
@@ -577,19 +579,49 @@ function drawEdges() {
   visible.forEach(([i, j]) => {
     const a = document.querySelector(`.node[data-n="${i}"] .outchip`);
     const bNode = document.querySelector(`.node[data-n="${j}"]`);
-    const b = (bNode && (bNode.querySelector(".chips .chip.fed") || bNode.querySelector(".chips")));
+    // #93: which segment the match actually landed in, so the arrow can
+    // target that kind's chip instead of always assuming assistant/"fed" -
+    // a tool-kind match previously rendered as if it landed in assistant.
+    const rawEdge = (s.edges || []).find(
+      (e) => e.kind === "output_text" && e.from === s.calls[i].id && e.to === s.calls[j].id);
+    const toSeg = rawEdge && rawEdge.to_segment != null
+      ? s.calls[j].segments[rawEdge.to_segment] : null;
+    // A tag name (a segment's `kind` when it came from tag(), not a fixed
+    // vocabulary) is arbitrary user text with no validation - compare
+    // .dataset.kind directly rather than splicing it into a CSS attribute
+    // selector string, whose escaping rules esc() (HTML-only) does not
+    // cover. A newline/CR/form-feed in a tag name previously threw inside
+    // querySelector and blanked every edge in this render pass.
+    const kindChip = (node, kind) =>
+      Array.from(node.querySelectorAll(".chips .chip")).find((el) => el.dataset.kind === kind);
+    const b = bNode && (
+      (toSeg && kindChip(bNode, toSeg.kind)) ||
+      bNode.querySelector(".chips .chip.fed") ||
+      bNode.querySelector(".chips"));
     if (!a || !b) return;
     const ar = a.getBoundingClientRect(), br = b.getBoundingClientRect();
     const hi = hiFrom === i;
     const stroke = `stroke="${hi ? "var(--edge-hi)" : "var(--edge)"}"
       stroke-width="${hi ? 2.5 : 2}" fill="none" stroke-linejoin="round"
       marker-end="url(#${hi ? "arrhi" : "arr"})"`;
+    // #93: what flowed, not just that something did - a token count (the
+    // source call's own reported output size) plus a snippet of the matched
+    // text. Free: the matched substring is what created the edge already.
+    const outTok = s.calls[i].usage ? s.calls[i].usage.completion_tokens : null;
+    const snippet = clip((s.calls[i].output && s.calls[i].output.content) || "", 40);
+    const labelShort = outTok != null ? `${fmt(outTok)} tok` : "";
+    const labelFull = (outTok != null ? `${fmt(outTok)} tok · ` : "") + snippet;
+    const label = (x, y) => labelShort
+      ? `<title>${esc(labelFull)}</title>
+         <text x="${x}" y="${y}" text-anchor="middle" class="edgelabel">${esc(labelShort)}</text>`
+      : `<title>${esc(labelFull)}</title>`;
     if (j === i + 1) {
       /* subway hop through the row gap: down → left → down into the fed chip's top */
       const x1 = ar.left - wr.left + 18, y1 = ar.bottom - wr.top - 2;
       const x2 = br.left + br.width / 2 - wr.left, y2 = br.top - wr.top - 3;
       const gapY = (y1 + y2) / 2;
-      h += `<path d="${orthPath([[x1, y1], [x1, gapY], [x2, gapY], [x2, y2]])}" ${stroke}/>`;
+      h += `<g>${label((x1 + x2) / 2, gapY - 4)}
+        <path d="${orthPath([[x1, y1], [x1, gapY], [x2, gapY], [x2, y2]])}" ${stroke}/></g>`;
     } else {
       /* long hop: gutter lane down, then across the free gap ABOVE the target row,
          entering the fed chip from the top (never crosses other chips) */
@@ -597,7 +629,8 @@ function drawEdges() {
       const x2 = br.left + br.width / 2 - wr.left, y2 = br.top - wr.top - 3;
       const gapY1 = y1 + 14;
       const gapY2 = y2 - 12;
-      h += `<path d="${orthPath([[x1, y1], [x1, gapY1], [GUTTER, gapY1], [GUTTER, gapY2], [x2, gapY2], [x2, y2]])}" ${stroke}/>`;
+      h += `<g>${label((GUTTER + x2) / 2, gapY2 - 4)}
+        <path d="${orthPath([[x1, y1], [x1, gapY1], [GUTTER, gapY1], [GUTTER, gapY2], [x2, gapY2], [x2, y2]])}" ${stroke}/></g>`;
     }
   });
   svg.innerHTML = h;

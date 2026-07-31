@@ -358,6 +358,46 @@ _MAX_EDGE_LOOKAHEAD = 500  # calls scanned ahead of each source
 _MAX_EDGES_PER_SOURCE = 32  # fan-out cap per source call
 
 
+def _matching_segment(output: str, haystack: str, segments: list[dict]) -> int | None:
+    """Which of the destination call's segments (by index) contains the
+    matched output, if any single one does (#93).
+
+    Walks every occurrence of `output` in the same joined `haystack` the
+    match test itself used (not just the first) and returns the first one
+    that lands entirely inside one segment. Two failure modes this avoids:
+
+    - Checking `output in segment["content"]` independently per segment
+      (an earlier attempt at this) picks whichever segment's *own* content
+      happens to contain the text — including a segment that comes before
+      an *earlier-positioned* occurrence that actually straddles a segment
+      boundary, attributing the match to the wrong place.
+    - Stopping at the *first* haystack position found is exactly that bug:
+      a boundary-straddling occurrence (an artifact of joining segments
+      with no separator) can sit earlier in the haystack than a later,
+      real, single-segment occurrence. Skip straddling hits and keep
+      looking rather than returning None too eagerly.
+
+    If the text is genuinely duplicated across segments (identical content
+    appearing twice), the first non-straddling occurrence wins — there is
+    no way to attribute a duplicated string to one copy over the other from
+    text alone, so this is a deliberate, documented tie-break, not a gap.
+    Only when *every* occurrence straddles a boundary is there truly no
+    segment to blame, and this returns None.
+    """
+    offset = haystack.find(output)
+    while offset != -1:
+        cursor = 0
+        for index, segment in enumerate(segments):
+            end = cursor + len(segment["content"])
+            if cursor <= offset < end:
+                if offset + len(output) <= end:
+                    return index
+                break  # straddles this segment's end; try the next occurrence
+            cursor = end
+        offset = haystack.find(output, offset + 1)
+    return None
+
+
 def _session_edges(calls: list[dict]) -> tuple[list[dict], bool]:
     """PLAN 4(b) inference: output->later-input text match + same-span chains.
 
@@ -380,7 +420,11 @@ def _session_edges(calls: list[dict]) -> tuple[list[dict], bool]:
         for j in range(i + 1, min(len(calls), i + 1 + _MAX_EDGE_LOOKAHEAD)):
             later = calls[j]
             if later.get("id") and later["id"] != call["id"] and output in haystacks[j]:
-                edges.append({"from": call["id"], "to": later["id"], "kind": "output_text"})
+                edge = {"from": call["id"], "to": later["id"], "kind": "output_text"}
+                to_segment = _matching_segment(output, haystacks[j], later["segments"])
+                if to_segment is not None:
+                    edge["to_segment"] = to_segment
+                edges.append(edge)
                 hits += 1
                 if hits >= _MAX_EDGES_PER_SOURCE:
                     truncated = True

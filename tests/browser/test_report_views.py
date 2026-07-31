@@ -71,6 +71,30 @@ def test_chain_view_draws_its_inferred_edges(open_report, live_report, live_data
     assert page.locator("#chain .node").count() == len(session["calls"])
 
 
+def test_chain_edges_carry_a_token_count_label_and_snippet_tooltip(
+    open_report, live_report, live_data
+):
+    """#93: the edge must say what flowed, not just that something did - a
+    visible token-count label plus a hover-title snippet of the matched text."""
+    index, session = next(
+        (i, s)
+        for i, s in enumerate(live_data["sessions"])
+        if [e for e in s.get("edges", []) if e["kind"] == "output_text"]
+    )
+    page = open_report(live_report)
+    page.click('.tab[data-view="chain"]')
+    page.click(f'.sessrow[data-i="{index}"]')
+    page.wait_for_selector("#chain .node")
+    page.wait_for_function("document.querySelectorAll('svg#edges .edgelabel').length > 0")
+
+    # innerText is layout-dependent and unreliable on SVG <text> across
+    # browsers; textContent (Playwright's all_text_contents) is not.
+    labels = page.locator("svg#edges .edgelabel").all_text_contents()
+    assert labels and all(label.endswith(" tok") for label in labels), labels
+    titles = page.locator("svg#edges title").all_text_contents()
+    assert any(" tok · " in t for t in titles), titles
+
+
 def _open_graph(open_report, report: str, index: int):
     page = open_report(report)
     page.click('.tab[data-view="graph"]')
