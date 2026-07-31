@@ -220,10 +220,42 @@ Name the feature for what it does today.
 ## 3. Sequencing
 
 #104 first (highest priority, and its lane allocator is reusable), then #102
-(shares the two-tier edge model), then #103. Suggested as three PRs, one per
-issue, matching the #95–#98 pattern.
+(shares the two-tier edge model), then #103.
 
 Light and dark are both mandatory; all new strokes and fills go through CSS
 custom properties, no hardcoded colors. No build step, no CDN, offline-openable
 output, static SVG. The `input → fn → output` metaphor is unchanged by all of
 the above.
+
+---
+
+## 4. As built
+
+Three commits on `feat/report-default-legibility`, one per issue, in the order
+above. 533 tests pass; `ruff check`/`format` clean. Verified by driving the
+generated report in headless Chromium in both themes: no console errors, and no
+hardcoded color reaches the rendered markup (every fill/stroke resolves through
+a CSS custom property).
+
+| | before | after |
+|---|---|---|
+| Chain edges drawn at rest | 7 of 15 (47%) | **15 of 15** |
+| Graph collapsed: content vs canvas | 346px in a 410px SVG, flows bulging right into blank space | 330px in a 390px SVG, gutter on the free left |
+| Graph collapsed: flows needing a lane | all of them | only non-adjacent ones (3 of 6 on the imported session) |
+| Declared structure rendered | 3 of 64 segments, 0 of 15 outputs (all `tool_defs`) | + 6 segments and 3 outputs carrying real tool-call arguments |
+
+New geometry lives in `--chain-gutter` so `drawEdges()` and the row padding
+cannot drift apart. `assignLanes()` is shared by both views.
+
+### Follow-ups, deliberately not in scope
+
+- **OpenAI `tool_calls`.** `_chat_output` surfaces `message.content` only, so a
+  response that is purely a tool call still renders as empty output, and its
+  `function.arguments` (a JSON *string* by the OpenAI contract, not a declared
+  object) carries no structure. Worth its own issue — it is a capture-shape
+  question, not a rendering one.
+- **Dashed inferred edges / rendering `same_span`.** Considered under #104 and
+  explicitly deferred; see the decision note there.
+- The demo generator has no session that is both tagged and multi-call, so the
+  three-column layout with flow edges is exercised by hand rather than by a
+  fixture. A fixture would let the right-hand gutter be regression-tested.
