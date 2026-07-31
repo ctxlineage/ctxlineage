@@ -16,6 +16,11 @@ max_pct = 80          # no single call may spend >80% of the model's context win
 segment = "history"   # a segment kind (system/user/assistant/tool/tool_defs) or a tag name
 max_pct = 40          # conversation history may not crowd out the retrieved context
 
+# --- requires_segment: needs no tagging either - asserts *whether*, not *how much*
+
+[[assert.requires_segment]]
+kind = "system"       # every call must carry the app's own system prompt
+
 # --- grounded: needs tags, and gates only because of them ---------------------
 
 [[assert.grounded]]

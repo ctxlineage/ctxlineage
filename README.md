@@ -100,6 +100,10 @@ max_pct = 20                 # tool definitions may not eat >20% of the window
 [[assert.grounded]]
 tag = "rag_chunks"           # every rag_chunks tag must land in the window
 warn_dead = true             # advisory: flag chunks nothing downstream consumed
+
+[[assert.requires_segment]]
+kind = "system"              # every call must carry a system segment
+when_model = "gpt-*"         # optional glob: scope to matching models only
 ```
 
 ```bash
@@ -112,6 +116,7 @@ your build:
 | | Gates on | Because |
 | --- | --- | --- |
 | `window_budget` | any call, **no tagging needed** | token counts and the model window are deterministic from capture alone |
+| `requires_segment` | any call, **no tagging needed** | segment presence is deterministic from capture alone — this asserts *whether*, not *how much* |
 | `grounded` presence | tagged content only | the `tag()` is your declaration, so "it never reached the window" is exact |
 | `grounded` dead-context | nothing — **advisory** | "nothing downstream used it" is read off *inferred* lineage edges |
 
@@ -127,7 +132,7 @@ skipped or warned — never silently passed.
 
 ```bash
 python examples/rag_app.py --mock            # records a real run, fully offline
-ctxlineage test -c examples/ctxlineage.toml  # → All 3 assertion(s) over 3 call(s) passed
+ctxlineage test -c examples/ctxlineage.toml  # → All 4 assertion(s) over 3 call(s) passed
 ```
 
 [`examples/ctxlineage.toml`](examples/ctxlineage.toml) is a commented reference

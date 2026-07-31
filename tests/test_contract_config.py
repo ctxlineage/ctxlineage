@@ -2,7 +2,7 @@ import pytest
 
 from ctxlineage._contract import config
 from ctxlineage._contract.config import ConfigError
-from ctxlineage._contract.rules import Grounded, WindowBudget
+from ctxlineage._contract.rules import Grounded, RequiresSegment, WindowBudget
 
 # The shape sketched in docs/vision/context-contract-testing.md §14.
 SKETCH = """
@@ -107,3 +107,35 @@ def test_error_names_the_offending_entry(tmp_path):
 def test_float_max_pct_is_accepted(tmp_path):
     (rule,) = config.load(_write(tmp_path, "[[assert.window_budget]]\nmax_pct = 99.5\n"))
     assert rule.max_pct == 99.5
+
+
+# --------------------------------------------------------------------------
+# requires_segment
+# --------------------------------------------------------------------------
+
+
+def test_requires_segment_loads(tmp_path):
+    (rule,) = config.load(_write(tmp_path, "[[assert.requires_segment]]\nkind = 'system'\n"))
+    assert rule == RequiresSegment(kind="system", when_model=None)
+
+
+def test_requires_segment_when_model_loads(tmp_path):
+    body = "[[assert.requires_segment]]\nkind = 'tool_defs'\nwhen_model = 'gpt-*'\n"
+    (rule,) = config.load(_write(tmp_path, body))
+    assert rule == RequiresSegment(kind="tool_defs", when_model="gpt-*")
+
+
+def test_requires_segment_kind_is_required(tmp_path):
+    with pytest.raises(ConfigError, match="kind is required"):
+        config.load(_write(tmp_path, "[[assert.requires_segment]]\nwhen_model = 'gpt-*'\n"))
+
+
+def test_requires_segment_rejects_unknown_key(tmp_path):
+    body = "[[assert.requires_segment]]\nkind = 'system'\nkinds = 'system'\n"
+    with pytest.raises(ConfigError, match="unknown key 'kinds'"):
+        config.load(_write(tmp_path, body))
+
+
+def test_requires_segment_kind_must_not_be_empty(tmp_path):
+    with pytest.raises(ConfigError, match="kind must not be empty"):
+        config.load(_write(tmp_path, "[[assert.requires_segment]]\nkind = ''\n"))
