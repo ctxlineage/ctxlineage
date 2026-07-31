@@ -41,6 +41,18 @@ land in minor versions).
   (#93).
 
 ### Fixed
+- Graph's flow edges no longer swing out into blank canvas once the source and
+  context-element columns collapse. The reserved gutter they route through was
+  fixed to the right of the call column — correct in the three-column layout,
+  where incoming provenance edges already occupy every call box's left edge,
+  but wrong the moment those columns are gone and there are no provenance
+  edges at all: the flows bulged rightward into an otherwise empty canvas,
+  appearing to point at something off-screen. The gutter now goes to whichever
+  side is free (left when collapsed, right otherwise), and "feeds the very
+  next call" is drawn as a straight drop between the two stacked boxes instead
+  of a gutter detour, so only real hops take a lane. Collapsed reports are now
+  sized to their content rather than to the vestigial lane, and the gutter is
+  labelled `FLOWS` when anything routes through it (#102).
 - Chain now draws the whole inferred lineage in its default state. Previously
   only "call N feeds call N+1" arrows were drawn and every other flow waited
   behind a click on an output chip — in the demo report that hid 8 of 15

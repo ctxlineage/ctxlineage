@@ -752,9 +752,12 @@ function renderGraphView() {
   // tagging nothing (hasElements false with real span_ids). The span
   // bracket below sits at `COLX.call - 16`; 10 would put it at negative x,
   // bleeding past the SVG's own left edge (found by adversarial review).
+  // #102: in the collapsed layout the call column also has to leave room for
+  // the flow gutter that moves to its left (see flowGutter below) and for the
+  // span bracket at `COLX.call - 16` that sits between the two.
   const COLX = hasElements
     ? { source: 10, element: 260, call: 560 }
-    : { source: 10, element: 10, call: 30 };
+    : { source: 10, element: 10, call: 120 };
   const W = { source: 210, element: 250, call: 240 };
   const H = { source: 34, element: 46, call: 52 };
   const GAPY = 26;
@@ -779,7 +782,22 @@ function renderGraphView() {
   srcs.forEach((n) => { y[n.id] = Math.max(n.want, cursor); cursor = y[n.id] + H.source + GAPY; });
 
   const height = Object.values(y).reduce((a, b) => Math.max(a, b), 60) + 120;
-  const laneBase = COLX.call + W.call + 30;
+  // #102: the flow gutter goes wherever the free space is. With the source and
+  // element columns present, the left edge of every call box is already taken
+  // by incoming provenance edges, so the gutter belongs on the right — that is
+  // the layout it was designed for. Once those columns collapse there are no
+  // provenance edges at all, and a right-hand gutter leaves the flows swinging
+  // out into blank canvas, pointing at nothing. Then the free side is the left.
+  const callIdx = new Map(s.calls.map((c, i) => ["call:" + c.id, i]));
+  const flows = g.edges.filter((e) => e.kind === "flows");
+  const hops = flows
+    .map((e) => [callIdx.get(e.from), callIdx.get(e.to)])
+    .filter(([a, b]) => a != null && b != null && b > a + 1);
+  const flowLanes = assignLanes(hops);
+  const laneStep = hasElements ? 14 : -14;
+  const laneBase = hasElements ? COLX.call + W.call + 30 : 76;
+  const laneX = (k) => laneBase + (k % GUTTER_LANES) * laneStep;
+  const svgW = hasElements ? laneBase + 110 : COLX.call + W.call + 30;
   const maxTok = els.reduce((a, n) => Math.max(a, n.tok || 0), 1);
   const nodeDim = (id) => (lit && !lit.has(id) ? "dimmed" : "");
   const edgeLit = (e) => lit && lit.has(e.from) && lit.has(e.to);
@@ -793,16 +811,29 @@ function renderGraphView() {
   </defs>`;
 
   let eh = "";
-  let lane = 0;
+  let lanesUsed = 0;
   g.edges.forEach((e) => {
     const hi = edgeLit(e);
     if (e.kind === "flows") {
-      const x1 = COLX.call + W.call, y1 = y[e.from] + H.call / 2;
-      const y2 = y[e.to] + H.call / 2;
-      const lx = laneBase + (lane++ % 5) * 14;
-      eh += `<path d="M ${x1} ${y1} L ${lx - 8} ${y1} Q ${lx} ${y1} ${lx} ${y1 + 8} L ${lx} ${y2 - 8} Q ${lx} ${y2} ${lx - 8} ${y2} L ${x1 + 2} ${y2}"
-        fill="none" stroke="${edgeStroke(e)}" stroke-width="${hi ? 2.5 : 1.8}" stroke-linejoin="round"
-        marker-end="url(#${hi ? "garrhi" : "garr"})"/>`;
+      const fi = callIdx.get(e.from), ti = callIdx.get(e.to);
+      const stroke = `fill="none" stroke="${edgeStroke(e)}" stroke-width="${hi ? 2.5 : 1.8}"
+        stroke-linejoin="round" marker-end="url(#${hi ? "garrhi" : "garr"})"`;
+      if (fi != null && ti === fi + 1) {
+        // feeds the very next call: say it with the shortest line that can —
+        // straight down the gap between two stacked boxes. No gutter needed,
+        // and "time flows down" becomes literal rather than implied.
+        const cx = COLX.call + W.call / 2;
+        eh += `<path d="M ${cx} ${y[e.from] + H.call} L ${cx} ${y[e.to] - 2}" ${stroke}/>`;
+        return;
+      }
+      const lx = laneX(flowLanes.get(fi + ">" + ti) ?? 0);
+      lanesUsed += 1;
+      const y1 = y[e.from] + H.call / 2, y2 = y[e.to] + H.call / 2;
+      // exit and re-enter on whichever side the gutter is on
+      const dir = hasElements ? 1 : -1;
+      const x1 = hasElements ? COLX.call + W.call : COLX.call;
+      eh += `<path d="M ${x1} ${y1} L ${lx - 8 * dir} ${y1} Q ${lx} ${y1} ${lx} ${y1 + 8}
+        L ${lx} ${y2 - 8} Q ${lx} ${y2} ${lx - 8 * dir} ${y2} L ${x1 + 2 * dir} ${y2}" ${stroke}/>`;
     } else {
       const fromType = e.from.startsWith("src:") ? "source" : "element";
       const x1 = COLX[fromType] + W[fromType], y1 = y[e.from] + H[fromType] / 2;
@@ -862,10 +893,13 @@ function renderGraphView() {
     }
   });
 
+  const head = (x, t, anchor) =>
+    `<text style="fill:var(--muted)" font-size="11" letter-spacing=".08em" x="${x}" y="16"
+       ${anchor ? `text-anchor="${anchor}"` : ""}>${t}</text>`;
   const heads = `
-    ${hasElements ? `<text style="fill:var(--muted)" font-size="11" letter-spacing=".08em" x="${COLX.source}" y="16">SOURCES</text>
-    <text style="fill:var(--muted)" font-size="11" letter-spacing=".08em" x="${COLX.element}" y="16">CONTEXT ELEMENTS</text>` : ""}
-    <text style="fill:var(--muted)" font-size="11" letter-spacing=".08em" x="${COLX.call}" y="16">LLM CALLS ↓ TIME</text>`;
+    ${hasElements ? head(COLX.source, "SOURCES") + head(COLX.element, "CONTEXT ELEMENTS") : ""}
+    ${head(COLX.call, "LLM CALLS ↓ TIME")}
+    ${lanesUsed ? head(laneBase, "FLOWS", hasElements ? "start" : "end") : ""}`;
 
   // Untagged banner: actionable for a native-capture user (they can tag);
   // honest, not actionable, for an imported session (tagging is structurally
@@ -878,7 +912,7 @@ function renderGraphView() {
       : "Wrap calls in <b>ctxlineage.span()</b> and <b>tag()</b> your chunks/prompts to see where context comes from."
     } Output→input flows are still shown below.</div>`;
   main.innerHTML = `<div id="graphwrap">${hint}
-    <svg width="${laneBase + 110}" height="${height}" style="overflow:visible">${defs}${bh}${heads}${eh}${nh}</svg>
+    <svg width="${svgW}" height="${height}" style="overflow:visible">${defs}${bh}${heads}${eh}${nh}</svg>
     <div class="note">click any node to trace its lineage (upstream + downstream); click again to clear.
     dashed element = tagged but never matched.</div></div>`;
   main.querySelectorAll(".nodebox").forEach((el) =>

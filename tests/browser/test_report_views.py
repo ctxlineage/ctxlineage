@@ -7,6 +7,8 @@ and the markers are counted against the report data, not merely found.
 
 from __future__ import annotations
 
+import re
+
 import pytest
 
 pytest.importorskip("playwright.sync_api")
@@ -180,13 +182,65 @@ def test_graph_collapses_empty_columns_for_an_untagged_session(open_report, live
     # the call column reclaims the space the source/element columns left
     # blank - offset from the very edge (not 0) to leave room for a span
     # bracket, which a session can carry even when untagged (span() and
-    # tag() are independent APIs).
-    call_rect_x = page.locator("#graphwrap svg .nodebox rect").first.get_attribute("x")
-    assert call_rect_x == "30"
+    # tag() are independent APIs), and (#102) for the flow gutter, which moves
+    # to the left in this layout because no provenance edge is using that edge.
+    call_rect_x = int(page.locator("#graphwrap svg .nodebox rect").first.get_attribute("x"))
+    assert call_rect_x == 120
+    # still far left of where the three-column layout puts it
+    assert call_rect_x < 560
     assert page.locator("#graphwrap .note", has_text="no tagged context elements").count() == 1
     assert "imported from an agent transcript" not in page.locator("#graphwrap").inner_text()
     assert len(session["calls"]) > 0  # the collapse must not drop any call node
     assert page.locator("#graphwrap svg .nodebox").count() == len(session["calls"])
+
+
+def test_graph_flow_gutter_moves_left_when_columns_collapse(open_report, live_report, live_data):
+    """#102: with the source/element columns gone, no provenance edge is using
+    the call boxes' left edge, so the flow gutter belongs there. Left on the
+    right it pointed into blank canvas."""
+    index, session = next(
+        (i, s)
+        for i, s in enumerate(live_data["sessions"])
+        if not s.get("elements") and [e for e in s.get("edges", []) if e["kind"] == "output_text"]
+    )
+    page = _open_graph(open_report, live_report, index)
+
+    call_x = int(page.locator("#graphwrap svg .nodebox rect").first.get_attribute("x"))
+    ds = page.evaluate(
+        """() => [...document.querySelectorAll('#graphwrap svg path[marker-end]')]
+             .map(p => p.getAttribute('d'))"""
+    )
+    xs = [float(m) for d in ds for m in re.findall(r"[ML] (\d+(?:\.\d+)?) ", d)]
+    assert xs, "no flow edges drawn"
+    assert min(xs) < call_x, "flow gutter is not left of the call column"
+    # and nothing routes off to the right of the call column any more
+    assert max(xs) <= call_x + 240 + 2, f"an edge still runs right of the calls: {max(xs)}"
+    assert len(session["calls"]) > 1
+
+
+def test_graph_adjacent_flows_are_a_straight_drop_between_boxes(
+    open_report, live_report, live_data
+):
+    """#102: 'feeds the very next call' is said with the shortest line that
+    can - straight down the gap - so only real hops need a gutter lane."""
+    index, _session = next(
+        (i, s)
+        for i, s in enumerate(live_data["sessions"])
+        if not s.get("elements") and [e for e in s.get("edges", []) if e["kind"] == "output_text"]
+    )
+    page = _open_graph(open_report, live_report, index)
+
+    ds = page.evaluate(
+        """() => [...document.querySelectorAll('#graphwrap svg path[marker-end]')]
+             .map(p => p.getAttribute('d'))"""
+    )
+    # a vertical drop is exactly "M x y L x y2" with both x equal
+    drops = [
+        d
+        for d in ds
+        if (m := re.fullmatch(r"M (\S+) (\S+) L (\S+) (\S+)", d.strip())) and m[1] == m[3]
+    ]
+    assert drops, f"no straight adjacent-flow drop found among {ds}"
 
 
 def test_graph_keeps_three_columns_for_a_tagged_session(open_report, live_report, live_data):
