@@ -132,7 +132,7 @@ skipped or warned — never silently passed.
 
 ```bash
 python examples/rag_app.py --mock            # records a real run, fully offline
-ctxlineage test -c examples/ctxlineage.toml  # → All 3 assertion(s) over 3 call(s) passed
+ctxlineage test -c examples/ctxlineage.toml  # → All 4 assertion(s) over 3 call(s) passed
 ```
 
 [`examples/ctxlineage.toml`](examples/ctxlineage.toml) is a commented reference
