@@ -589,9 +589,14 @@ function renderGraphView() {
   // span/tag API, not an import artifact - #89's own follow-up trial found
   // this identical empty-column layout on a native, untagged capture too.
   const hasElements = (s.elements || []).length > 0;
+  // call: 30, not 10, in the collapsed layout - span() and tag() are
+  // independent APIs, so a session can group calls with span() while
+  // tagging nothing (hasElements false with real span_ids). The span
+  // bracket below sits at `COLX.call - 16`; 10 would put it at negative x,
+  // bleeding past the SVG's own left edge (found by adversarial review).
   const COLX = hasElements
     ? { source: 10, element: 260, call: 560 }
-    : { source: 10, element: 10, call: 10 };
+    : { source: 10, element: 10, call: 30 };
   const W = { source: 210, element: 250, call: 240 };
   const H = { source: 34, element: 46, call: 52 };
   const GAPY = 26;

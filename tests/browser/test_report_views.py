@@ -91,9 +91,12 @@ def test_graph_collapses_empty_columns_for_an_untagged_session(open_report, live
     assert page.locator("#graphwrap svg text:has-text('SOURCES')").count() == 0
     assert page.locator("#graphwrap svg text:has-text('CONTEXT ELEMENTS')").count() == 0
     assert page.locator("#graphwrap svg text:has-text('LLM CALLS')").count() == 1
-    # the call column reclaims the space the source/element columns left blank
+    # the call column reclaims the space the source/element columns left
+    # blank - offset from the very edge (not 0) to leave room for a span
+    # bracket, which a session can carry even when untagged (span() and
+    # tag() are independent APIs).
     call_rect_x = page.locator("#graphwrap svg .nodebox rect").first.get_attribute("x")
-    assert call_rect_x == "10"
+    assert call_rect_x == "30"
     assert page.locator("#graphwrap .note", has_text="no tagged context elements").count() == 1
     assert "imported from an agent transcript" not in page.locator("#graphwrap").inner_text()
     assert len(session["calls"]) > 0  # the collapse must not drop any call node
@@ -110,6 +113,82 @@ def test_graph_keeps_three_columns_for_a_tagged_session(open_report, live_report
     assert page.locator("#graphwrap svg text:has-text('CONTEXT ELEMENTS')").count() == 1
     assert page.locator("#graphwrap .note", has_text="no tagged context elements").count() == 0
     assert len(session["elements"]) > 0  # guard the guard: fixture must carry elements
+
+
+def _event(
+    event_type, session, payload, call_id=None, span_id=None, ts="2026-06-12T09:00:00+00:00"
+):
+    return {
+        "schema_version": 1,
+        "event_type": event_type,
+        "session_id": session,
+        "span_id": span_id,
+        "call_id": call_id,
+        "timestamp": ts,
+        "payload": payload,
+    }
+
+
+def _spanned_untagged_events() -> list[dict]:
+    """Two calls sharing a span, zero tag() calls - span() and tag() are
+    independent APIs, so this combination is real and reachable, unlike a
+    "some calls imported, some native" session in the same run."""
+    call_payload = {
+        "provider": "openai",
+        "api": "chat.completions",
+        "request": {"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "hi"}]},
+        "response": {
+            "choices": [
+                {"message": {"role": "assistant", "content": "hello"}, "finish_reason": "stop"}
+            ]
+        },
+        "usage": {"prompt_tokens": 5, "completion_tokens": 2, "total_tokens": 7},
+        "stream": False,
+        "duration_ms": 5.0,
+        "call_stack": [],
+    }
+    return [
+        _event(
+            "span_start",
+            "session-spanned-untagged",
+            {"name": "answer_user_query"},
+            span_id="sp1",
+        ),
+        _event("llm_call", "session-spanned-untagged", call_payload, call_id="c1", span_id="sp1"),
+        _event(
+            "llm_call",
+            "session-spanned-untagged",
+            call_payload,
+            call_id="c2",
+            span_id="sp1",
+            ts="2026-06-12T09:01:00+00:00",
+        ),
+    ]
+
+
+def test_graph_span_bracket_has_no_negative_coordinates_when_untagged(open_report, render_events):
+    """Regression: a session can group calls with span() while tagging
+    nothing, so it hits the collapsed (no SOURCES/CONTEXT ELEMENTS) layout
+    while still drawing a span bracket. The bracket sits left of the call
+    column at `COLX.call - 16` - if the collapsed call column sits flush
+    against the SVG's own left edge, that bracket (and its label) render at
+    a negative x, bleeding past the SVG's origin."""
+    report = render_events(_spanned_untagged_events())
+    page = _open_graph(open_report, report, 0)
+
+    assert page.locator("#graphwrap svg text:has-text('SOURCES')").count() == 0
+    # svg path also matches the <defs> block's arrowhead-marker shapes
+    # (rendered first, but nested two levels inside <defs><marker>) - scope
+    # to direct children of <svg>, where the bracket paths are added first
+    # in source order, ahead of any edge paths.
+    path_d = page.locator("#graphwrap svg > path").first.get_attribute("d")
+    assert path_d is not None
+    # every y-coordinate in this bracket path is already guaranteed positive
+    # by the layout (H.call/GAPY are positive, the running cursor starts at
+    # 40), so any negative number in the path can only be the bracket's own
+    # x - checking every coordinate (not just x) is still a precise test.
+    coords = [float(tok) for tok in path_d.replace("M", "").replace("L", "").split()]
+    assert min(coords) >= 0, f"bracket path has a negative coordinate: {path_d}"
 
 
 def test_graph_banner_is_honest_about_import_when_untagged(

@@ -81,3 +81,30 @@ label already answers the question without a new widget.
   visually — empty-column collapse, 3-column regression guard, import banner
   wording, dual percentage on an imported call, its absence on a live call,
   and the suppressed thinking marker in a real rendered output body.
+
+## Adversarial review, pre-merge: one real (cosmetic-today) bug found and fixed
+
+- **Minor — span-bracket geometry went negative on a collapsed graph
+  column.** `span()` and `tag()` are independent APIs, so a session can
+  group calls with `span()` while tagging nothing — `hasElements` false
+  with real `span_id`s on the calls. The span-bracket code sits at `COLX.call
+  - 16`; with the collapsed column flush against the SVG's own left edge
+  (`call: 10`), the bracket path and its label rendered at negative x,
+  bleeding past the SVG's origin. Not visibly broken today only because
+  `#main`'s own CSS padding happened to absorb the bleed — a coincidence,
+  not a guard. Neither of this PR's own new tests exercised "untagged +
+  spanned" (the demo fixture's only spanned session is also its only tagged
+  one). Fixed by widening the collapsed layout's `call` column from `10` to
+  `30`, leaving room for the bracket; the existing collapsed-column test's
+  `call_rect_x == "10"` assertion is updated to `"30"` accordingly. New
+  regression test `test_graph_span_bracket_has_no_negative_coordinates_when_untagged`
+  builds the specific untagged+spanned combination and asserts every
+  coordinate in the bracket's SVG path is non-negative — confirmed to
+  reproduce the exact `-6` x-coordinate the review found when temporarily
+  reverted.
+- **Nit, not fixed** — the `allImported` banner logic assumes a session is
+  purely native or purely imported; a mixed session isn't reachable through
+  any documented CLI flow today, so this is an unguarded assumption rather
+  than a live bug. Left as-is.
+
+Full suite after the fix: **462 passed**, lint clean.
