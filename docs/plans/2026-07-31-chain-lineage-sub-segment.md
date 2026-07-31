@@ -93,3 +93,55 @@ around — see `test_to_segment_absent_when_the_match_spans_a_segment_boundary`.
   labels the fanned-out edges independently, and the arrow visibly
   terminates on the tool chip rather than the assistant chip when that is
   where the match landed.
+
+## 7. Adversarial review, pre-merge: two real bugs found and fixed
+
+Per this plan's own §0 note, PR 4 got a dedicated adversarial Agent review
+before merge given its risk. It found two genuine issues, both fixed and
+covered by new regression tests (full suite now **489 passed**, lint clean):
+
+- **BLOCKER — CSS-selector-string injection crashes `drawEdges()`.** A tag
+  name is arbitrary user text (`Span.tag()` has no validation; `apply_tags`
+  sets a segment's `kind` to it verbatim) — it is not limited to the
+  built-in kind vocabulary (`system`/`user`/`assistant`/`tool`/`tool_defs`).
+  §4's `.chips .chip[data-kind="${esc(toSeg.kind)}"]` interpolated that
+  value into `querySelector`'s CSS-selector syntax. `esc()` only
+  HTML-entity-escapes (`&<>"`); it does nothing for CSS-selector escaping,
+  which has entirely different (backslash-based) rules and flatly rejects
+  raw control characters. A tag name containing `\n`, `\r`, or `\x0c` threw
+  a `SyntaxError` inside the single `forEach` that builds the whole edges
+  string before one `innerHTML` assignment — one hostile tag name blanked
+  *every* edge in the render, not just its own.
+  Fix: stopped interpolating into CSS-selector syntax at all. Chips now
+  carry `data-kind` as before, but the destination chip is found via a
+  plain array search comparing `.dataset.kind` by JS string equality:
+  `Array.from(node.querySelectorAll(".chips .chip")).find(el =>
+  el.dataset.kind === kind)`. This is correct for *any* string, not just a
+  denylist of dangerous characters — verified live (Playwright) against tag
+  names containing `\n`, `\r`, `\x0c`, `"`, and `\`, all rendering exactly
+  one correctly-targeted edge with no console error, plus a new pinned
+  regression test (`test_a_tag_name_with_a_newline_does_not_crash_the_edges`,
+  `tests/browser/test_report_lineage.py`).
+- **MAJOR — `_matching_segment` could misattribute a match to the wrong
+  segment when text is duplicated.** The original per-segment independent
+  `in` check tested each segment in isolation, so if the destination's
+  segment 0 happened to also contain a copy of the matched text (coincidence
+  or a boundary-spanning artifact — segments are joined with no separator),
+  it could report segment 0 even when the *real* semantic source was a later
+  segment. A first-draft fix (single `haystack.find()` + cumulative-offset
+  mapping) was checked against the reviewer's own scenario and found to
+  return the same answer as the old code either way (duplicate text is
+  genuinely ambiguous — there is no textual way to tell which occurrence is
+  "the real" one, so segment 0 is the only defensible deterministic answer)
+  — but that draft introduced a *new* regression: a boundary-spanning
+  artifact earlier in the haystack would make `.find()` give up with `None`
+  entirely, even when a later, clean, unambiguous occurrence existed.
+  Final fix: `_matching_segment` walks *all* occurrences of the matched text
+  in the haystack (`haystack.find(output, offset + 1)` in a loop), skips any
+  that straddle a segment boundary, and returns the first that fits cleanly
+  within one segment — falling back to `None` only if every occurrence
+  straddles a boundary. Two new tests in `tests/test_normalize.py` pin both
+  behaviors: a boundary-artifact-then-clean-occurrence case now correctly
+  resolves to the later segment, and a pure-duplicate-text case
+  deterministically (and, by design, unavoidably) resolves to the first
+  occurrence.

@@ -494,6 +494,65 @@ def test_to_segment_absent_when_the_match_spans_a_segment_boundary():
     assert "to_segment" not in edge
 
 
+def test_to_segment_skips_a_boundary_artifact_for_a_later_clean_occurrence():
+    """A regression an adversarial review caught: localizing only the FIRST
+    haystack position is wrong when that position is a straddling artifact
+    (the join has no separator) and a later segment independently, cleanly
+    contains the real occurrence. Must keep looking rather than giving up
+    at the first (spurious) hit."""
+    answer = "ROTATE-EVERY-90-DAYS-PRECISELY"
+    events = [
+        _call_event(
+            "c1", "2026-07-16T09:00:00+00:00", [{"role": "user", "content": "rotate?"}], answer
+        ),
+        _call_event(
+            "c2",
+            "2026-07-16T09:01:00+00:00",
+            [
+                # the join stitches these into "...ROTATE-EVERY-90-DAYS-PRECISELY..."
+                # at the boundary - a straddling artifact, not a real occurrence.
+                {"role": "system", "content": "preamble... ROTATE-EVERY-90-"},
+                {"role": "assistant", "content": "DAYS-PRECISELY (unrelated aside)"},
+                # the real, clean, single-segment occurrence - later in the haystack.
+                {"role": "tool", "name": "log", "content": f"logged: {answer}"},
+            ],
+            "ok",
+        ),
+    ]
+    edges = normalize.build_report_data(events)["sessions"][0]["edges"]
+    edge = next(e for e in edges if e["kind"] == "output_text")
+    assert edge["to_segment"] == 2
+
+
+def test_to_segment_ties_off_deterministically_on_duplicated_text():
+    """When the identical text genuinely appears in two segments, there is no
+    way to attribute it to one copy over the other from text alone - the
+    first non-straddling occurrence wins, a documented tie-break rather than
+    an attempt at a semantically 'correct' answer that cannot exist."""
+    boilerplate = "I will look into that and follow up with you shortly."
+    events = [
+        _call_event(
+            "c1",
+            "2026-07-16T09:00:00+00:00",
+            [{"role": "user", "content": "hi"}],
+            boilerplate,
+        ),
+        _call_event(
+            "c2",
+            "2026-07-16T09:01:00+00:00",
+            [
+                {"role": "assistant", "content": boilerplate},  # an unrelated earlier turn
+                {"role": "user", "content": "do the thing"},
+                {"role": "tool", "name": "log", "content": boilerplate},  # the real feed-back
+            ],
+            "ok",
+        ),
+    ]
+    edges = normalize.build_report_data(events)["sessions"][0]["edges"]
+    edge = next(e for e in edges if e["kind"] == "output_text")
+    assert edge["to_segment"] == 0  # first occurrence, deterministic - not the "tool" segment
+
+
 def test_short_output_produces_no_edge():
     events = [
         _call_event("c1", "2026-07-16T09:00:00+00:00", [{"role": "user", "content": "hi"}], "yes"),

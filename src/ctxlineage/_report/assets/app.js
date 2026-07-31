@@ -586,8 +586,16 @@ function drawEdges() {
       (e) => e.kind === "output_text" && e.from === s.calls[i].id && e.to === s.calls[j].id);
     const toSeg = rawEdge && rawEdge.to_segment != null
       ? s.calls[j].segments[rawEdge.to_segment] : null;
+    // A tag name (a segment's `kind` when it came from tag(), not a fixed
+    // vocabulary) is arbitrary user text with no validation - compare
+    // .dataset.kind directly rather than splicing it into a CSS attribute
+    // selector string, whose escaping rules esc() (HTML-only) does not
+    // cover. A newline/CR/form-feed in a tag name previously threw inside
+    // querySelector and blanked every edge in this render pass.
+    const kindChip = (node, kind) =>
+      Array.from(node.querySelectorAll(".chips .chip")).find((el) => el.dataset.kind === kind);
     const b = bNode && (
-      (toSeg && bNode.querySelector(`.chips .chip[data-kind="${esc(toSeg.kind)}"]`)) ||
+      (toSeg && kindChip(bNode, toSeg.kind)) ||
       bNode.querySelector(".chips .chip.fed") ||
       bNode.querySelector(".chips"));
     if (!a || !b) return;
