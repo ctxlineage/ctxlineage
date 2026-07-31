@@ -29,6 +29,21 @@ land in minor versions).
   gap is not itself a content regression. `baseline = "..."` resolves
   relative to the `ctxlineage.toml` file's own directory, not the process's
   working directory (#94).
+- **`metamorphic`** — a new `ctxlineage test` rule asserting how the
+  *assembled context* was allowed to respond to a perturbed input: record
+  the run twice (once normally, once with one input changed) and declare
+  the relation. `invariant` (shuffling retrieval order must not change what
+  the context contains — catches order-sensitive dedup and truncation) or
+  `changed` (dropping a chunk must actually reach the prompt — catches a
+  silently-ignored parameter). This is the vision doc's third assertion
+  class, CheckList's INV/DIR, shipped at the **context** level: judging that
+  two different *answers* mean the same thing is a semantic call reserved
+  for the judge tier, and would be vacuous on the mocked runs the README
+  recommends gating anyway. Like `grounded`, it needs `tag()` to gate —
+  untagged, chunks are one joined string and "reordered" is
+  indistinguishable from "rewritten", so it warns rather than failing or
+  passing. Output-level metamorphic, with the statistical gating a live run
+  would need, is deferred to its own design discussion (#14, #105).
 - Segments and outputs now carry `structured` — the structure the provider
   itself declared inside a message's content blocks, currently a tool call's
   own arguments — and the Calls view renders it as a tree beside the text it
