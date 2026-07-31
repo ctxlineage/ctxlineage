@@ -8,8 +8,16 @@ break if that shape drifts.
 
 from __future__ import annotations
 
+import json
+
 from ctxlineage._contract import runner
-from ctxlineage._contract.rules import Grounded, RequiresSegment, SegmentDiff, WindowBudget
+from ctxlineage._contract.rules import (
+    Grounded,
+    Metamorphic,
+    RequiresSegment,
+    SegmentDiff,
+    WindowBudget,
+)
 from ctxlineage._report import normalize
 
 CHUNK = "ALPHA-CHUNK-CONTENT-ONE: ctxlineage records every call locally."
@@ -749,6 +757,146 @@ def test_runner_reports_findings_from_every_rule():
     findings = runner.run(data, [WindowBudget(max_pct=80), Grounded(tag="memory")])
     assert {f.rule for f in findings} == {"window_budget", "grounded"}
     assert len(_sev(findings, "fail")) == 2
+
+
+# --------------------------------------------------------------------------
+# metamorphic - INV/DIR over the assembled context, tag-required
+# --------------------------------------------------------------------------
+
+RAG = [
+    "[c1] alpha chunk about widgets and their care",
+    "[c2] beta chunk about gadgets and their care",
+    "[c3] gamma chunk about gizmos and their care",
+]
+
+
+def _rag_run(chunks, *, tagged=True, call_id="c1", session="s1"):
+    """A recorded run whose retrieved chunks are (optionally) tagged.
+
+    Built from real span_start/tag events through the real pipeline, because
+    the whole premise of this rule is that `apply_tags` splits a joined
+    message per chunk - a hand-written report dict would assume away the
+    exact thing under test.
+    """
+    events = [_span_start("sp1", "answer", session=session)]
+    if tagged:
+        events.append(_tag("sp1", "rag_chunks", json.dumps(chunks), session=session))
+    events.append(
+        _llm_call(
+            call_id,
+            session=session,
+            span="sp1",
+            messages=[{"role": "user", "content": "Context:\n" + "\n".join(chunks) + "\n\nQ?"}],
+        )
+    )
+    return _data(*events)
+
+
+def test_metamorphic_invariant_holds_when_only_the_order_changed():
+    """The INV case the vision doc names: perturbing retrieval ORDER must not
+    change what the context actually contains."""
+    current = _rag_run(RAG)
+    variant = _rag_run(list(reversed(RAG)))
+    rule = Metamorphic(variant_data=variant, relation="invariant", segment="rag_chunks")
+    assert runner.run(current, [rule]) == []
+
+
+def test_metamorphic_invariant_fails_when_a_chunk_changed():
+    current = _rag_run(RAG)
+    variant = _rag_run([RAG[0], RAG[1], "[c9] an entirely different chunk about sprockets"])
+    rule = Metamorphic(variant_data=variant, relation="invariant", segment="rag_chunks")
+    findings = runner.run(current, [rule])
+    assert len(findings) == 1
+    assert findings[0].severity == "fail"
+    assert "not invariant under the perturbation" in findings[0].message
+
+
+def test_metamorphic_invariant_fails_when_the_reorder_silently_dropped_a_chunk():
+    """The bug this rule exists to catch: a shuffle that also loses content,
+    which an order-sensitive dedup would produce and nothing else would see."""
+    current = _rag_run(RAG)
+    variant = _rag_run([RAG[2], RAG[1]])  # reordered AND one short
+    rule = Metamorphic(variant_data=variant, relation="invariant", segment="rag_chunks")
+    findings = runner.run(current, [rule])
+    assert len(findings) == 1
+    assert findings[0].severity == "fail"
+    assert "1 part(s) only in this run" in findings[0].message
+
+
+def test_metamorphic_changed_holds_when_a_chunk_was_dropped():
+    """The DIR case: dropping a chunk MUST reach the assembled context."""
+    current = _rag_run(RAG)
+    variant = _rag_run(RAG[:2])
+    rule = Metamorphic(variant_data=variant, relation="changed", segment="rag_chunks")
+    assert runner.run(current, [rule]) == []
+
+
+def test_metamorphic_changed_fails_when_the_perturbation_had_no_effect():
+    """A `k` that is ignored, a filter that never fires: the caller thinks
+    they perturbed the input, but the context came out identical."""
+    current = _rag_run(RAG)
+    variant = _rag_run(RAG)
+    rule = Metamorphic(variant_data=variant, relation="changed", segment="rag_chunks")
+    findings = runner.run(current, [rule])
+    assert len(findings) == 1
+    assert findings[0].severity == "fail"
+    assert "unchanged under the perturbation" in findings[0].message
+
+
+def test_metamorphic_warns_rather_than_gating_an_untagged_run():
+    """Untagged, the chunks are one joined string: a reorder is
+    indistinguishable from a rewrite, so the relation cannot be expressed at
+    all. That must warn - never fail, and never silently pass (§6)."""
+    current = _rag_run(RAG, tagged=False)
+    variant = _rag_run(list(reversed(RAG)), tagged=False)
+    rule = Metamorphic(variant_data=variant, relation="invariant", segment="rag_chunks")
+    findings = runner.run(current, [rule])
+    assert not _sev(findings, "fail")
+    assert _sev(findings, "warn")
+    assert "never appeared" in _messages(findings)
+    assert "span.tag('rag_chunks', ...)" in _messages(findings)
+
+
+def test_metamorphic_warns_when_the_kind_is_present_on_only_one_side():
+    """Ambiguous between 'the perturbation dropped it entirely' and 'that run
+    was not tagged' - ambiguous evidence must not hard-gate."""
+    current = _rag_run(RAG)
+    variant = _rag_run(RAG, tagged=False)
+    rule = Metamorphic(variant_data=variant, relation="invariant", segment="rag_chunks")
+    findings = runner.run(current, [rule])
+    assert not _sev(findings, "fail")
+    assert _sev(findings, "warn")
+    assert "ambiguous" in _messages(findings)
+
+
+def test_metamorphic_skips_an_incomplete_import():
+    """An import cannot reconstruct exact segments, so the multiset it would
+    compare is a fraction of the real one - the same guard every other
+    segment-reading rule applies."""
+    current = _data(_imported_call("c1", messages=[{"role": "user", "content": "hi"}]))
+    variant = _data(_imported_call("v1", messages=[{"role": "user", "content": "hi"}]))
+    rule = Metamorphic(variant_data=variant, relation="invariant", segment="rag_chunks")
+    findings = runner.run(current, [rule])
+    assert _sev(findings, "skip")
+    assert not _sev(findings, "fail")
+
+
+def test_metamorphic_warns_on_a_pairing_gap():
+    current = _data(
+        _llm_call("c1", messages=[{"role": "user", "content": "hi"}]),
+        _span_start("sp9", "extra_step"),
+        _llm_call(
+            "c2",
+            span="sp9",
+            messages=[{"role": "user", "content": "hi"}],
+            ts="2026-07-17T00:01:00+00:00",
+        ),
+    )
+    variant = _data(_llm_call("v1", messages=[{"role": "user", "content": "hi"}]))
+    rule = Metamorphic(variant_data=variant, relation="invariant", segment="rag_chunks")
+    findings = runner.run(current, [rule])
+    assert not _sev(findings, "fail")
+    assert "pairing gap, not a relation violation" in _messages(findings)
 
 
 def test_has_failures_only_counts_hard_gates():

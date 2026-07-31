@@ -234,3 +234,70 @@ def test_segment_diff_baseline_path_is_relative_to_the_config_file_not_cwd(tmp_p
 
     (rule,) = config.load(config_path)
     assert [c["id"] for s in rule.baseline_data["sessions"] for c in s["calls"]] == ["b1"]
+
+
+# --------------------------------------------------------------------------
+# metamorphic
+# --------------------------------------------------------------------------
+
+_MM = "[[assert.metamorphic]]\nvariant = 'variant.jsonl'\nrelation = '{}'\nsegment = 'rag_chunks'\n"
+
+
+def test_metamorphic_loads(tmp_path):
+    _write_baseline(tmp_path, name="variant.jsonl", call_id="v1")
+    (rule,) = config.load(_write(tmp_path, _MM.format("invariant")))
+    assert rule.relation == "invariant"
+    assert rule.segment == "rag_chunks"
+    assert [c["id"] for s in rule.variant_data["sessions"] for c in s["calls"]] == ["v1"]
+
+
+def test_metamorphic_accepts_the_changed_relation(tmp_path):
+    _write_baseline(tmp_path, name="variant.jsonl", call_id="v1")
+    (rule,) = config.load(_write(tmp_path, _MM.format("changed")))
+    assert rule.relation == "changed"
+
+
+@pytest.mark.parametrize("missing", ["variant", "relation", "segment"])
+def test_metamorphic_requires_every_key(tmp_path, missing):
+    _write_baseline(tmp_path, name="variant.jsonl", call_id="v1")
+    lines = [
+        line
+        for line in _MM.format("invariant").strip().splitlines()
+        if not line.startswith(f"{missing} ")
+    ]
+    with pytest.raises(ConfigError, match=f"{missing} is required"):
+        config.load(_write(tmp_path, "\n".join(lines) + "\n"))
+
+
+def test_metamorphic_rejects_an_unknown_relation(tmp_path):
+    """A typo'd relation must name the valid values rather than silently
+    evaluating as neither INV nor DIR."""
+    _write_baseline(tmp_path, name="variant.jsonl", call_id="v1")
+    with pytest.raises(ConfigError, match="relation must be one of invariant, changed"):
+        config.load(_write(tmp_path, _MM.format("invarient")))
+
+
+def test_metamorphic_rejects_unknown_key(tmp_path):
+    _write_baseline(tmp_path, name="variant.jsonl", call_id="v1")
+    body = _MM.format("invariant") + "tolerance = 0.9\n"
+    with pytest.raises(ConfigError, match="unknown key 'tolerance'"):
+        config.load(_write(tmp_path, body))
+
+
+def test_metamorphic_missing_variant_file_is_a_config_error(tmp_path):
+    with pytest.raises(ConfigError, match="variant not found"):
+        config.load(_write(tmp_path, _MM.format("invariant")))
+
+
+def test_metamorphic_variant_path_is_relative_to_the_config_file_not_cwd(tmp_path, monkeypatch):
+    config_dir = tmp_path / "project"
+    config_dir.mkdir()
+    _write_baseline(config_dir, name="variant.jsonl", call_id="v1")
+    config_path = _write(config_dir, _MM.format("invariant"))
+
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    monkeypatch.chdir(elsewhere)
+
+    (rule,) = config.load(config_path)
+    assert [c["id"] for s in rule.variant_data["sessions"] for c in s["calls"]] == ["v1"]
