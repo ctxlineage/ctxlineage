@@ -412,7 +412,86 @@ def test_output_text_edge_inferred():
     ]
     data = normalize.build_report_data(events)
     edges = data["sessions"][0]["edges"]
-    assert {"from": "c1", "to": "c2", "kind": "output_text"} in edges
+    # to_segment (#93): c2's whole input is one user-role segment, and the
+    # match lands inside it - index 0.
+    assert {"from": "c1", "to": "c2", "kind": "output_text", "to_segment": 0} in edges
+
+
+def test_to_segment_points_at_the_real_index_not_always_zero():
+    """A system segment ahead of the matching one must not be mistaken for
+    it - index 1, not a coincidental 0 (the case every other edge test
+    happens to exercise)."""
+    answer = "The webhook secret rotates every 90 days."
+    events = [
+        _call_event(
+            "c1", "2026-07-16T09:00:00+00:00", [{"role": "user", "content": "rotate?"}], answer
+        ),
+        _call_event(
+            "c2",
+            "2026-07-16T09:01:00+00:00",
+            [
+                {"role": "system", "content": "Be concise."},
+                {"role": "user", "content": "Earlier you said: " + answer + " Why?"},
+            ],
+            "Because of policy.",
+        ),
+    ]
+    edges = normalize.build_report_data(events)["sessions"][0]["edges"]
+    assert {"from": "c1", "to": "c2", "kind": "output_text", "to_segment": 1} in edges
+
+
+def test_to_segment_identifies_a_tool_kind_destination():
+    """#93's other bug (found alongside the missing label): Chain's arrow
+    always pointed at the aggregated assistant/'fed' chip regardless of which
+    kind the match actually landed in. to_segment is what lets the frontend
+    target the real kind instead of assuming assistant."""
+    answer = "The webhook secret rotates every 90 days."
+    events = [
+        _call_event(
+            "c1", "2026-07-16T09:00:00+00:00", [{"role": "user", "content": "rotate?"}], answer
+        ),
+        _call_event(
+            "c2",
+            "2026-07-16T09:01:00+00:00",
+            [
+                {"role": "user", "content": "look this up"},
+                {"role": "tool", "name": "search_docs", "content": answer},
+            ],
+            "Because of policy.",
+        ),
+    ]
+    data = normalize.build_report_data(events)
+    edges = data["sessions"][0]["edges"]
+    edge = next(e for e in edges if e["kind"] == "output_text")
+    c2 = data["sessions"][0]["calls"][1]
+    assert c2["segments"][edge["to_segment"]]["kind"] == "tool"
+
+
+def test_to_segment_absent_when_the_match_spans_a_segment_boundary():
+    """The joined-haystack match test is unchanged (no regression to what
+    counts as a flow) - only localization is best-effort. A match straddling
+    two segments (the join has no separator) has no single segment to blame,
+    so the edge is still recorded, just without to_segment."""
+    events = [
+        _call_event(
+            "c1",
+            "2026-07-16T09:00:00+00:00",
+            [{"role": "user", "content": "rotate?"}],
+            "The webhook secret rotates every 90 days.",
+        ),
+        _call_event(
+            "c2",
+            "2026-07-16T09:01:00+00:00",
+            [
+                {"role": "system", "content": "Earlier you said: The webhook se"},
+                {"role": "user", "content": "cret rotates every 90 days. Why?"},
+            ],
+            "Because of policy.",
+        ),
+    ]
+    edges = normalize.build_report_data(events)["sessions"][0]["edges"]
+    edge = next(e for e in edges if e["kind"] == "output_text")
+    assert "to_segment" not in edge
 
 
 def test_short_output_produces_no_edge():
@@ -857,7 +936,7 @@ def test_anthropic_output_text_edge_inferred():
         ts="2026-07-16T09:01:00+00:00",
     )
     edges = normalize.build_report_data([e1, e2])["sessions"][0]["edges"]
-    assert {"from": "c1", "to": "c2", "kind": "output_text"} in edges
+    assert {"from": "c1", "to": "c2", "kind": "output_text", "to_segment": 0} in edges
 
 
 def test_anthropic_usage_folds_cache_tokens():

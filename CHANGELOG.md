@@ -33,6 +33,12 @@ land in minor versions).
   expandable tree — top-level keys visible at a glance, nested branches
   opened on click — instead of an undifferentiated wall of quotes and
   braces. Non-JSON content is unaffected (#92).
+- Chain's lineage edges now say **what** flowed, not just that something did:
+  each arrow carries a token-count label and a hover tooltip with a snippet
+  of the matched text, and terminates on the specific segment the match
+  landed in — previously it always pointed at the aggregated assistant
+  ("fed") chip, even when the match was actually in a `tool`-kind segment
+  (#93).
 
 ### Fixed
 - Imported agent-loop sessions no longer show every call in one episode with

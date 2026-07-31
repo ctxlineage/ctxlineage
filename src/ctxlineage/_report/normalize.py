@@ -358,6 +358,22 @@ _MAX_EDGE_LOOKAHEAD = 500  # calls scanned ahead of each source
 _MAX_EDGES_PER_SOURCE = 32  # fan-out cap per source call
 
 
+def _matching_segment(output: str, segments: list[dict]) -> int | None:
+    """Which of the destination call's segments (by index) contains the
+    matched output, if any single one does (#93).
+
+    The match test itself stays against the *joined* haystack (unchanged, no
+    behaviour change to what counts as a flow) — this only localizes an
+    already-confirmed match. A match can in principle straddle a segment
+    boundary (the join has no separator); there is no single segment to blame
+    for that, so it returns None rather than guessing one.
+    """
+    for index, segment in enumerate(segments):
+        if output in segment["content"]:
+            return index
+    return None
+
+
 def _session_edges(calls: list[dict]) -> tuple[list[dict], bool]:
     """PLAN 4(b) inference: output->later-input text match + same-span chains.
 
@@ -380,7 +396,11 @@ def _session_edges(calls: list[dict]) -> tuple[list[dict], bool]:
         for j in range(i + 1, min(len(calls), i + 1 + _MAX_EDGE_LOOKAHEAD)):
             later = calls[j]
             if later.get("id") and later["id"] != call["id"] and output in haystacks[j]:
-                edges.append({"from": call["id"], "to": later["id"], "kind": "output_text"})
+                edge = {"from": call["id"], "to": later["id"], "kind": "output_text"}
+                to_segment = _matching_segment(output, later["segments"])
+                if to_segment is not None:
+                    edge["to_segment"] = to_segment
+                edges.append(edge)
                 hits += 1
                 if hits >= _MAX_EDGES_PER_SOURCE:
                     truncated = True
