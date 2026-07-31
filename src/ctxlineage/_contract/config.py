@@ -21,7 +21,13 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-from ctxlineage._contract.rules import Grounded, RequiresSegment, SegmentDiff, WindowBudget
+from ctxlineage._contract.rules import (
+    Grounded,
+    Metamorphic,
+    RequiresSegment,
+    SegmentDiff,
+    WindowBudget,
+)
 from ctxlineage._report.normalize import build_report_data, load_events
 
 if sys.version_info >= (3, 11):
@@ -76,11 +82,11 @@ def parse(raw: dict, source: str = "ctxlineage.toml", base_dir: Path | None = No
             where = f"{source}: assert.{name}[{index}]"
             if not isinstance(entry, dict):
                 raise ConfigError(f"{where}: must be a table")
-            # segment_diff is the one rule that resolves a path (its baseline
-            # JSONL) - relative to this config file's own directory, not the
-            # process CWD - so it alone needs base_dir; every other parser
-            # stays a plain (entry, where) function.
-            if name == SegmentDiff.NAME:
+            # Rules that read a second recorded run resolve its path relative
+            # to this config file's own directory, not the process CWD - so
+            # they alone need base_dir; every other parser stays a plain
+            # (entry, where) function.
+            if name in _PATH_TAKING_RULES:
                 rules.append(parser(entry, where, base_dir or Path(".")))
             else:
                 rules.append(parser(entry, where))
@@ -146,23 +152,55 @@ def _parse_requires_segment(entry: dict, where: str) -> RequiresSegment:
     return RequiresSegment(kind=kind, when_model=when_model)
 
 
+def _load_run(entry: dict, key: str, where: str, base_dir: Path) -> dict:
+    """Resolve and normalize a second recorded run named by `entry[key]`.
+
+    Read through the same two ordinary functions the CLI itself calls, so a
+    rule's second run goes through exactly one code path, not a private one.
+    """
+    path = base_dir / _string(entry, key, where)
+    if not path.exists():
+        raise ConfigError(f"{where}: {key} not found: {path}")
+    events, _ = load_events(path)
+    return build_report_data(events)
+
+
+def _parse_metamorphic(entry: dict, where: str, base_dir: Path) -> Metamorphic:
+    _reject_unknown(entry, {"variant", "relation", "segment"}, where)
+    for key in ("variant", "relation", "segment"):
+        if key not in entry:
+            raise ConfigError(f"{where}: {key} is required")
+    relation = _string(entry, "relation", where)
+    if relation not in Metamorphic.RELATIONS:
+        raise ConfigError(
+            f"{where}: relation must be one of {', '.join(Metamorphic.RELATIONS)}, got {relation!r}"
+        )
+    # Every cheap check first: reading and normalizing the variant run is by
+    # far the most expensive thing this parser does, and a config that is
+    # already invalid should not pay for it (nor report the file's problems
+    # ahead of its own).
+    segment = _string(entry, "segment", where)
+    return Metamorphic(
+        variant_data=_load_run(entry, "variant", where, base_dir),
+        relation=relation,
+        segment=segment,
+    )
+
+
 def _parse_segment_diff(entry: dict, where: str, base_dir: Path) -> SegmentDiff:
     _reject_unknown(entry, {"baseline", "max_token_delta", "segment"}, where)
     if "baseline" not in entry:
         raise ConfigError(f"{where}: baseline is required")
     if "max_token_delta" not in entry:
         raise ConfigError(f"{where}: max_token_delta is required")
-    baseline_path = base_dir / _string(entry, "baseline", where)
-    if not baseline_path.exists():
-        raise ConfigError(f"{where}: baseline not found: {baseline_path}")
     max_token_delta = _number(entry, "max_token_delta", where)
     if max_token_delta < 0:
         raise ConfigError(f"{where}: max_token_delta must not be negative, got {max_token_delta!r}")
     segment = _string(entry, "segment", where) if "segment" in entry else None
-    events, _ = load_events(baseline_path)
-    baseline_data = build_report_data(events)
     return SegmentDiff(
-        baseline_data=baseline_data, max_token_delta=max_token_delta, segment=segment
+        baseline_data=_load_run(entry, "baseline", where, base_dir),
+        max_token_delta=max_token_delta,
+        segment=segment,
     )
 
 
@@ -173,4 +211,12 @@ _PARSERS = {
     Grounded.NAME: _parse_grounded,
     RequiresSegment.NAME: _parse_requires_segment,
     SegmentDiff.NAME: _parse_segment_diff,
+    Metamorphic.NAME: _parse_metamorphic,
+}
+
+#: Rules whose config names a second recorded run, so their parser takes the
+#: config file's own directory to resolve that path against.
+_PATH_TAKING_RULES = {
+    SegmentDiff.NAME,
+    Metamorphic.NAME,
 }

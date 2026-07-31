@@ -109,6 +109,11 @@ when_model = "gpt-*"         # optional glob: scope to matching models only
 baseline = "baselines/golden.jsonl"  # a prior recorded run, resolved relative to this file
 max_token_delta = 200         # a segment may grow by at most this many tokens vs. baseline
 segment = "tool_defs"         # optional; omitted = the whole prompt
+
+[[assert.metamorphic]]
+variant = "runs/shuffled.jsonl"  # the same scenario, recorded with one input perturbed
+relation = "invariant"        # "invariant": the perturbation must NOT change this segment
+segment = "rag_chunks"        # required, and must be a tag name to gate (see below)
 ```
 
 ```bash
@@ -124,6 +129,7 @@ your build:
 | `requires_segment` | any call, **no tagging needed** | segment presence is deterministic from capture alone — this asserts *whether*, not *how much* |
 | `segment_diff` | any call, **no tagging needed** | comparing two recorded runs' own token counts is deterministic from capture alone |
 | `grounded` presence | tagged content only | the `tag()` is your declaration, so "it never reached the window" is exact |
+| `metamorphic` | tagged content only | untagged, your chunks are one joined string — "reordered" and "rewritten" are indistinguishable, so the relation can't be expressed at all |
 | `grounded` dead-context | nothing — **advisory** | "nothing downstream used it" is read off *inferred* lineage edges |
 
 Gating on inference is how you get a flaky gate, so ctxlineage won't do it: an
@@ -144,6 +150,32 @@ session's identity has quietly changed (a new session type inserted ahead
 of an old one, same-second sessions reordering), the diff compares
 unrelated sessions with no warning — a baseline is only trustworthy against
 a pipeline whose session shape hasn't changed since it was recorded.
+
+`metamorphic` asserts how your **assembled context** was allowed to respond
+to a perturbation: record the run twice, once normally and once with one
+input deliberately changed, then state the relation.
+
+- `relation = "invariant"` — the perturbation must **not** change this
+  segment's contents. Shuffling retrieval order is the canonical case:
+  the order may differ, the chunks may not. Catches order-sensitive dedup
+  and order-dependent truncation — a shuffle that quietly drops a chunk.
+- `relation = "changed"` — the perturbation **must** change them. Dropping
+  a chunk, or lowering `k`, has to actually reach the prompt. Catches a
+  parameter your pipeline silently ignores.
+
+It asserts on the context, not on the model's answer, even though "the
+answer should be invariant" is the more familiar phrasing. Judging that two
+different answers mean the same thing is a semantic call — that's the
+LLM-judge layer, not a deterministic gate — and it would be vacuous on
+exactly the mocked/replayed runs this page recommends gating, since a canned
+reply can't respond to a perturbed input at all.
+
+This one needs `tag()`. Untagged, your retrieved chunks arrive as one joined
+message and land as a single segment, so a reorder rewrites one opaque
+string and "same chunks, reordered" is indistinguishable from "different
+chunks". `span.tag("rag_chunks", docs)` splits them per chunk, and only then
+does the comparison mean what it says — so an untagged run warns that it
+couldn't gate, rather than failing or quietly passing.
 
 ### Try it in 30 seconds (no API key)
 

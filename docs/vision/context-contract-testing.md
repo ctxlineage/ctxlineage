@@ -123,6 +123,14 @@ why "I don't like LLM-as-judge" resolves to "push the judge into a thin top laye
   token-delta budget.
 - **Metamorphic / invariance (CheckList INV/DIR):** perturb `rag_chunks` order → answer should be
   invariant; drop a cited chunk → answer should change/degrade.
+  **Shipped in v0.2.2 as `metamorphic`, at the *context* level** — `invariant`/`changed` over the
+  assembled context, not over the answer. The output-level half stated above collides with §10:
+  judging that two different answers mean the same thing is a semantic call, which §7 assigns to
+  the judge tier, and it is vacuous on the mocked/replayed runs this track tells people to gate
+  (a canned reply cannot respond to a perturbed input). Tag-required, like `grounded`: untagged,
+  chunks arrive as one joined message, so "reordered" and "rewritten" are indistinguishable and
+  the relation cannot be expressed at all. **Output-level metamorphic with the statistical gating
+  of §9 is a deferred follow-up phase, not abandoned — see #105 for the open design questions.**
 - **Provenance / groundedness (the unique class):** every claim in the output should trace to a
   context segment via lineage; flag **dead context** (a chunk with no downstream edge). This last
   one *is* the original context-engineering mission re-read as a test.

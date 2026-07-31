@@ -15,10 +15,15 @@ Each rule declares the tier it can reach (§6) and the runner never overrides it
 - `segment_diff` gates a growth threshold between two recorded runs; a pairing
   gap between them (a step present on only one side) has no content to
   compare, so it warns rather than fails.
+- `metamorphic` gates how the assembled context responded to a perturbation,
+  and like `grounded` it needs a `tag()` to be exact — untagged, the chunks
+  are one joined string and the relation cannot be expressed at all, so it
+  demotes to advisory.
 """
 
 from __future__ import annotations
 
+from collections import Counter
 from dataclasses import dataclass
 from fnmatch import fnmatch
 
@@ -353,6 +358,78 @@ def _group_by_step(calls: list[dict]) -> dict:
     return groups
 
 
+def _paired_calls(session: dict, other_session: dict):
+    """Pair two recorded runs' calls positionally, in this run's own order.
+
+    Yields `(step, call, other_call)`: `other_call` is None when this run's
+    call has no counterpart, and `call` is None when the other run has one
+    this run does not. Never both.
+
+    There is no cross-run call identity in this codebase, so pairing is
+    positional - sessions pair by position (callers zip them, both already
+    sorted by start time) and calls pair by the Kth occurrence of a given
+    `step` within the session. Shared by every rule that reads two runs, so
+    the pairing semantics can only ever drift in one place.
+    """
+    here = _group_by_step(session["calls"])
+    there = _group_by_step(other_session["calls"])
+    for step, calls in here.items():
+        other_calls = there.get(step, [])
+        for index, call in enumerate(calls):
+            yield step, call, (other_calls[index] if index < len(other_calls) else None)
+    for step, other_calls in there.items():
+        calls = here.get(step, [])
+        for orphan in other_calls[len(calls) :]:
+            yield step, None, orphan
+
+
+def _session_count_gap(rule: str, data: dict, other: dict, other_label: str) -> Finding | None:
+    """Warn when two runs hold different numbers of sessions.
+
+    Positional pairing zips the two session lists, so the extras on the
+    longer side are simply never visited. Silently comparing fewer sessions
+    than the run contains is the "unevaluated reads as a pass" failure this
+    track exists to prevent, so it has to surface even though there is no
+    natural identity to name the extras by.
+    """
+    here, there = len(data["sessions"]), len(other["sessions"])
+    if here == there:
+        return None
+    return Finding(
+        rule,
+        WARN,
+        f"this run has {here} session(s) and {other_label} has {there} - only the first "
+        f"{min(here, there)} were paired, the rest were not compared at all",
+    )
+
+
+def _tag_declared(session: dict, name: str) -> bool:
+    """Did this run declare `name` as a tag, whether or not it matched?
+
+    `elements` records every `tag()` call, with its own `matched` flag - so
+    "no element named X" means the run never claimed to have X at all
+    (untagged, or a different pipeline), which is a different thing from
+    "declared X but it did not reach the window."
+    """
+    return any(element["name"] == name for element in session.get("elements") or ())
+
+
+def _kind_ever_present(kind: str, *datasets: dict) -> bool:
+    """Did this segment kind appear anywhere across the given runs?
+
+    A kind that is absent everywhere means nothing was actually compared -
+    a typo'd name, or (for a tag name) a run that was never tagged. Rules
+    use this to warn rather than let an unevaluated assertion read as a
+    pass.
+    """
+    for dataset in datasets:
+        for session in dataset["sessions"]:
+            for call in session["calls"]:
+                if any(s.get("kind") == kind for s in call["segments"]):
+                    return True
+    return False
+
+
 @dataclass(frozen=True)
 class SegmentDiff:
     """Regression/differential testing (vision doc §8's "natural first
@@ -388,19 +465,40 @@ class SegmentDiff:
     def check(self, data: dict) -> list[Finding]:
         findings: list[Finding] = []
         evaluated_any = False
-        # strict=False: a session count mismatch has no natural identity to
-        # name the extras by - the extra sessions on the longer side are
-        # simply not compared, not an error.
+        paired_any = False
+        # strict=False: the extras on the longer side have no natural identity
+        # to pair by, so they are not compared - but that is reported below
+        # rather than passed over in silence.
         pairs = zip(data["sessions"], self.baseline_data["sessions"], strict=False)
         for session, baseline_session in pairs:
-            session_findings, session_evaluated = self._check_session(session, baseline_session)
+            session_findings, session_evaluated, session_paired = self._check_session(
+                session, baseline_session
+            )
             findings.extend(session_findings)
             evaluated_any = evaluated_any or session_evaluated
+            paired_any = paired_any or session_paired
+        gap = _session_count_gap(self.NAME, data, self.baseline_data, "the baseline")
+        if gap is not None:
+            findings.append(gap)
+        if not paired_any:
+            # No call was ever put next to a counterpart - an empty or
+            # unrelated baseline. Reporting this as a pass would be the exact
+            # "unevaluated reads as green" failure the tier rule forbids.
+            findings.append(
+                Finding(
+                    self.NAME,
+                    WARN,
+                    "no call could be paired with the baseline, so nothing was compared - "
+                    "check that the baseline is the same pipeline's recorded run",
+                )
+            )
+            return findings
         # Mirrors WindowBudget's typo guard: a segment kind that never
         # appears on either side of the diff is indistinguishable, by the
         # math alone, from "genuinely never grew" - delta is always 0 either
         # way. Warn rather than let a typo read as a permanently-passing gate.
-        if self.segment and evaluated_any and not self._segment_ever_present(data):
+        never_seen = self.segment and not _kind_ever_present(self.segment, data, self.baseline_data)
+        if never_seen and evaluated_any:
             findings.append(
                 Finding(
                     self.NAME,
@@ -412,50 +510,41 @@ class SegmentDiff:
             )
         return findings
 
-    def _check_session(self, session: dict, baseline_session: dict) -> tuple[list[Finding], bool]:
+    def _check_session(
+        self, session: dict, baseline_session: dict
+    ) -> tuple[list[Finding], bool, bool]:
         findings: list[Finding] = []
         evaluated = False
-        current_groups = _group_by_step(session["calls"])
-        baseline_groups = _group_by_step(baseline_session["calls"])
-        for step, calls in current_groups.items():
-            baseline_calls = baseline_groups.get(step, [])
-            for index, call in enumerate(calls):
-                if index >= len(baseline_calls):
-                    findings.append(
-                        Finding(
-                            self.NAME,
-                            WARN,
-                            f"{_locate(session, call)}: no baseline call to compare against "
-                            f"(step {step!r}) - pairing gap, not a content regression",
-                        )
-                    )
-                    continue
-                finding = self._compare(session, call, baseline_calls[index])
-                if finding is None or finding.severity != SKIP:
-                    evaluated = True
-                if finding is not None:
-                    findings.append(finding)
-        for step, baseline_calls in baseline_groups.items():
-            calls = current_groups.get(step, [])
-            for orphan in baseline_calls[len(calls) :]:
+        paired = False
+        for step, call, baseline_call in _paired_calls(session, baseline_session):
+            if baseline_call is None:
                 findings.append(
                     Finding(
                         self.NAME,
                         WARN,
-                        f"{_locate(baseline_session, orphan)}: baseline call has no "
+                        f"{_locate(session, call)}: no baseline call to compare against "
+                        f"(step {step!r}) - pairing gap, not a content regression",
+                    )
+                )
+                continue
+            if call is None:
+                findings.append(
+                    Finding(
+                        self.NAME,
+                        WARN,
+                        f"{_locate(baseline_session, baseline_call)}: baseline call has no "
                         f"counterpart in this run for step {step!r} - pairing gap, not a "
                         f"content regression",
                     )
                 )
-        return findings, evaluated
-
-    def _segment_ever_present(self, data: dict) -> bool:
-        for dataset in (data, self.baseline_data):
-            for session in dataset["sessions"]:
-                for call in session["calls"]:
-                    if any(s.get("kind") == self.segment for s in call["segments"]):
-                        return True
-        return False
+                continue
+            paired = True
+            finding = self._compare(session, call, baseline_call)
+            if finding is None or finding.severity != SKIP:
+                evaluated = True
+            if finding is not None:
+                findings.append(finding)
+        return findings, evaluated, paired
 
     def _compare(self, session: dict, call: dict, baseline_call: dict) -> Finding | None:
         if not call.get("segments_complete", True):
@@ -492,3 +581,193 @@ class SegmentDiff:
         if self.segment:
             return sum(s["tokens_est"] for s in call["segments"] if s.get("kind") == self.segment)
         return call["input_tokens_est"]
+
+
+@dataclass(frozen=True)
+class Metamorphic:
+    """Metamorphic / invariance testing (vision doc §8, CheckList INV/DIR),
+    asserted at the level of the assembled **context** rather than the
+    model's answer.
+
+    The system under test is the context pipeline: perturb an input (shuffle
+    the retrieval order, drop a chunk), record the perturbed run too, and
+    assert how the assembled context was allowed to respond.
+
+    - `invariant` (INV): the perturbation must NOT change this segment's
+      contents. Catches order-sensitive dedup, order-dependent truncation,
+      a shuffle that quietly drops a chunk.
+    - `changed` (DIR): the perturbation MUST change them. Catches a
+      perturbation that silently had no effect - an ignored `k`, a filter
+      that never fires.
+
+    **Why not assert on the answer,** which is how §8 phrases its examples:
+    deciding two different answers "mean the same thing" is a semantic
+    judgment, which §10 rules out and §7 assigns to the judge tier. It is
+    also vacuous on exactly the runs this project tells people to gate - a
+    mocked/replayed run's output cannot respond to a perturbed input at all,
+    so the assertion would pass by construction. Output-level metamorphic
+    needs the statistical treatment §9 describes and is deferred to that
+    phase.
+
+    **Why this one needs tags.** Untagged, an app's chunks are joined into
+    one message and land as a single `user` segment, so a reorder rewrites
+    one opaque string and "same chunks, reordered" is indistinguishable from
+    "different chunks". A `tag()` splits them per element, and only then does
+    the multiset comparison below actually mean what it says. So this gates
+    only where a tag made the decomposition exact, and degrades to advisory
+    otherwise - the tier rule (§6) on its own terms, same as `Grounded`.
+    """
+
+    variant_data: dict
+    relation: str
+    segment: str
+
+    NAME = "metamorphic"
+    INVARIANT = "invariant"
+    CHANGED = "changed"
+    RELATIONS = (INVARIANT, CHANGED)
+
+    def check(self, data: dict) -> list[Finding]:
+        findings: list[Finding] = []
+        evaluated_any = False
+        paired_any = False
+        pairs = zip(data["sessions"], self.variant_data["sessions"], strict=False)
+        for session, variant_session in pairs:
+            session_findings, session_evaluated, session_paired = self._check_session(
+                session, variant_session
+            )
+            findings.extend(session_findings)
+            evaluated_any = evaluated_any or session_evaluated
+            paired_any = paired_any or session_paired
+        gap = _session_count_gap(self.NAME, data, self.variant_data, "the variant")
+        if gap is not None:
+            findings.append(gap)
+        if not paired_any:
+            findings.append(
+                Finding(
+                    self.NAME,
+                    WARN,
+                    "no call could be paired with the variant, so the relation was never "
+                    "checked - is the variant the same scenario, recorded with one input "
+                    "perturbed?",
+                )
+            )
+            return findings
+        if evaluated_any and not _kind_ever_present(self.segment, data, self.variant_data):
+            findings.append(
+                Finding(
+                    self.NAME,
+                    WARN,
+                    f"segment {self.segment!r} never appeared in this run or the variant, so "
+                    f"nothing was compared - cannot gate, because without a tag the chunks are "
+                    f"one joined message and a reorder is indistinguishable from a rewrite. Tag "
+                    f"the content (span.tag({self.segment!r}, ...)) to turn this into a hard "
+                    f"gate (kinds are {', '.join(KNOWN_SEGMENT_KINDS)}, or a tag name)",
+                )
+            )
+        return findings
+
+    def _check_session(
+        self, session: dict, variant_session: dict
+    ) -> tuple[list[Finding], bool, bool]:
+        findings: list[Finding] = []
+        evaluated = False
+        paired = False
+        for step, call, variant_call in _paired_calls(session, variant_session):
+            if variant_call is None:
+                findings.append(
+                    Finding(
+                        self.NAME,
+                        WARN,
+                        f"{_locate(session, call)}: no variant call to compare against "
+                        f"(step {step!r}) - pairing gap, not a relation violation",
+                    )
+                )
+                continue
+            if call is None:
+                findings.append(
+                    Finding(
+                        self.NAME,
+                        WARN,
+                        f"{_locate(variant_session, variant_call)}: variant call has no "
+                        f"counterpart in this run for step {step!r} - pairing gap, not a "
+                        f"relation violation",
+                    )
+                )
+                continue
+            paired = True
+            finding = self._compare(session, variant_session, call, variant_call)
+            if finding is None or finding.severity != SKIP:
+                evaluated = True
+            if finding is not None:
+                findings.append(finding)
+        return findings, evaluated, paired
+
+    def _compare(
+        self, session: dict, variant_session: dict, call: dict, variant_call: dict
+    ) -> Finding | None:
+        if not call.get("segments_complete", True):
+            return Finding(
+                self.NAME,
+                SKIP,
+                f"{_locate(session, call)}: segment {self.segment!r} not compared - this run's "
+                f"call is {_incomplete_reason(call)}",
+            )
+        if not variant_call.get("segments_complete", True):
+            return Finding(
+                self.NAME,
+                SKIP,
+                f"{_locate(session, call)}: segment {self.segment!r} not compared - the variant "
+                f"call is {_incomplete_reason(variant_call)}",
+            )
+        here = self._contents(call)
+        there = self._contents(variant_call)
+        if not here and not there:
+            # Out of scope for this pair, not a violation: a call that never
+            # carried this kind on either side has nothing to be invariant
+            # about. The run-level guard catches "absent everywhere".
+            return None
+        if not here or not there:
+            # Absent on one side only. Whether that is evidence depends on
+            # something the data actually records: `elements` lists every
+            # tag() the run declared, independent of whether it matched. A
+            # run that never declared the tag gives no visibility at all, so
+            # the absence proves nothing (WARN). A run that DID declare it
+            # and still has no such segment really is missing the content -
+            # exact evidence, so it falls through to the relation below and
+            # gates like any other difference.
+            missing_session = variant_session if not there else session
+            missing_side = "the variant" if not there else "this run"
+            if not _tag_declared(missing_session, self.segment):
+                return Finding(
+                    self.NAME,
+                    WARN,
+                    f"{_locate(session, call)}: segment {self.segment!r} is absent from "
+                    f"{missing_side}, which never declared it as a tag - untagged, its chunks "
+                    f"are one joined string, so the absence proves nothing and is not gated",
+                )
+        if self.relation == self.INVARIANT and here != there:
+            only_here = Counter(here) - Counter(there)
+            only_there = Counter(there) - Counter(here)
+            return Finding(
+                self.NAME,
+                FAIL,
+                f"{_locate(session, call)}: segment {self.segment!r} is not invariant under the "
+                f"perturbation - {sum(only_here.values())} part(s) only in this run, "
+                f"{sum(only_there.values())} only in the variant "
+                f"({len(here)} vs {len(there)} part(s) total)",
+            )
+        if self.relation == self.CHANGED and here == there:
+            return Finding(
+                self.NAME,
+                FAIL,
+                f"{_locate(session, call)}: segment {self.segment!r} is unchanged under the "
+                f"perturbation ({len(here)} part(s), identical contents) - the perturbation "
+                f"did not reach the assembled context",
+            )
+        return None
+
+    def _contents(self, call: dict) -> list[str]:
+        """This kind's contents as a sorted multiset: order is what the
+        perturbation is allowed to change, content is what it is not."""
+        return sorted(s["content"] for s in call["segments"] if s.get("kind") == self.segment)
