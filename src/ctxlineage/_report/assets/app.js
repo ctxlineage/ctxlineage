@@ -511,7 +511,8 @@ function renderChain() {
       <span><i style="background:var(--tool)"></i>tool/MCP</span>
       <span><i style="background:var(--tooldef)"></i>tool defs</span></div>
     <p class="sesshead">session <b>${esc(s.id)}</b> — ${s.calls.length} calls, time flows ↓ ;
-      <b>↳ n</b> = feeds n later calls beyond the next (click an output to trace)</p>`;
+      bold arrows feed the next call, thin gutter arrows feed a later one
+      (<b>↳ n</b> = how many). Click an output to trace just its flows.</p>`;
   let body = "";
   let i = 0;
   while (i < s.calls.length) {
@@ -529,8 +530,9 @@ function renderChain() {
     }
   }
   main.innerHTML = `${h}<div id="wrap"><svg id="edges"></svg><div id="chain">${body}</div></div>
-    <div class="note">edges are inferred from the data — an output's text found inside a later
-    call's input. Tagging (span API) will add source-level precision.</div>`;
+    <div class="note">every arrow here, next-call and later-call alike, is inferred from the
+    data — an output's text found inside a later call's input. Tagging (span API) will add
+    source-level precision.</div>`;
   main.querySelectorAll(".outchip").forEach((el) =>
     el.addEventListener("click", () => {
       hiFrom = hiFrom === +el.dataset.i ? null : +el.dataset.i; render();
@@ -554,6 +556,25 @@ function orthPath(pts, r = 8) {
   return d;
 }
 
+/* #104: lanes for the non-adjacent flows, by greedy interval colouring over the
+   row ranges they span. Two hops share a lane only when their ranges cannot
+   touch. Before this, every hop was routed at one shared x — which is why
+   drawing them all at rest was not an option and they were hidden behind a
+   click instead. Ranges that merely meet at a row (2->4 and 4->6) are treated
+   as conflicting, so the shared row never reads as one continuous line. */
+const GUTTER_LANES = 5;
+function assignLanes(hops) {
+  const lane = new Map();
+  const lastRow = [];
+  [...hops].sort((a, b) => a[0] - b[0] || a[1] - b[1]).forEach(([i, j]) => {
+    let k = lastRow.findIndex((end) => end < i);
+    if (k === -1) k = lastRow.length;
+    lastRow[k] = j;
+    lane.set(i + ">" + j, k);
+  });
+  return lane;
+}
+
 function drawEdges() {
   const svg = document.getElementById("edges");
   const wrap = document.getElementById("wrap");
@@ -563,20 +584,36 @@ function drawEdges() {
   const wr = wrap.getBoundingClientRect();
   svg.setAttribute("viewBox", `0 0 ${wr.width} ${wr.height}`);
   const bodyStyle = getComputedStyle(document.body);
-  let h = `<defs>
-    <marker id="arr" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
-      <path d="M0,0 L10,5 L0,10 z" fill="${bodyStyle.getPropertyValue("--edge").trim() || "#1FBFAE"}"/></marker>
-    <marker id="arrhi" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
-      <path d="M0,0 L10,5 L0,10 z" fill="${bodyStyle.getPropertyValue("--edge-hi").trim() || "#11897d"}"/></marker>
-  </defs>`;
+  const edgeCol = bodyStyle.getPropertyValue("--edge").trim() || "#1FBFAE";
+  const hiCol = bodyStyle.getPropertyValue("--edge-hi").trim() || "#11897d";
+  const dimCol = bodyStyle.getPropertyValue("--edge-dim").trim() || "rgba(107,118,130,.35)";
+  /* Markers cannot inherit the path's stroke-opacity, so the quieter weights
+     need their own arrowhead rather than one shared marker. */
+  const arrow = (id, fill, w, op) =>
+    `<marker id="${id}" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="${w}"
+       markerHeight="${w}" orient="auto-start-reverse">
+       <path d="M0,0 L10,5 L0,10 z" fill="${fill}" fill-opacity="${op}"/></marker>`;
+  let h = `<defs>${arrow("arr", edgeCol, 7, 1)}${arrow("arrhi", hiCol, 8, 1)}
+    ${arrow("arrsub", edgeCol, 6, 0.55)}${arrow("arrdim", dimCol, 6, 1)}</defs>`;
   const all = chainEdges.length ? chainEdges : findEdges(s);
-  /* default: only the quiet adjacent chain; click an output to fan out its downstream */
-  const visible = hiFrom === null
-    ? all.filter(([i, j]) => j === i + 1)
-    : all.filter(([i]) => i === hiFrom);
-  /* vertical channel inside the number gutter (nodes have 40px left padding) */
-  const GUTTER = 24;
-  visible.forEach(([i, j]) => {
+  /* #104: everything is drawn at rest. Adjacent hops keep the full-weight
+     subway hop through the row gap; the later flows — the ones worth the
+     product's name, and 53% of all edges in the demo report — run quietly
+     down the gutter instead of waiting for a click. Clicking now promotes one
+     source's flows and dims the rest, rather than being the only way to see
+     them at all. */
+  const lanes = assignLanes(all.filter(([i, j]) => j > i + 1));
+  /* Several hops can leave one row or arrive at another; stagger their
+     horizontal runs through the row gap so they stack instead of overprinting. */
+  const outN = new Map(), inN = new Map();
+  const seat = new Map();
+  const bump = (m, k) => { const n = m.get(k) || 0; m.set(k, n + 1); return n; };
+  [...all].sort((a, b) => a[0] - b[0] || a[1] - b[1]).forEach(([i, j]) => {
+    seat.set(i + ">" + j, { out: bump(outN, i), in: bump(inN, j) });
+  });
+  /* lane x inside the reserved gutter — see --chain-gutter in style.css */
+  const laneX = (k) => 22 + (k % GUTTER_LANES) * 8;
+  all.forEach(([i, j]) => {
     const a = document.querySelector(`.node[data-n="${i}"] .outchip`);
     const bNode = document.querySelector(`.node[data-n="${j}"]`);
     // #93: which segment the match actually landed in, so the arrow can
@@ -601,9 +638,13 @@ function drawEdges() {
     if (!a || !b) return;
     const ar = a.getBoundingClientRect(), br = b.getBoundingClientRect();
     const hi = hiFrom === i;
-    const stroke = `stroke="${hi ? "var(--edge-hi)" : "var(--edge)"}"
-      stroke-width="${hi ? 2.5 : 2}" fill="none" stroke-linejoin="round"
-      marker-end="url(#${hi ? "arrhi" : "arr"})"`;
+    const sub = j > i + 1;                     // a later flow, not the next call
+    const dim = hiFrom !== null && !hi;        // something else is being traced
+    const marker = hi ? "arrhi" : dim ? "arrdim" : sub ? "arrsub" : "arr";
+    const stroke = `stroke="${hi ? "var(--edge-hi)" : dim ? "var(--edge-dim)" : "var(--edge)"}"
+      stroke-width="${hi ? 2.5 : sub ? 1.5 : 2}"
+      ${sub && !hi && !dim ? 'stroke-opacity=".55"' : ""}
+      fill="none" stroke-linejoin="round" marker-end="url(#${marker})"`;
     // #93: what flowed, not just that something did - a token count (the
     // source call's own reported output size) plus a snippet of the matched
     // text. Free: the matched substring is what created the edge already.
@@ -611,26 +652,32 @@ function drawEdges() {
     const snippet = clip((s.calls[i].output && s.calls[i].output.content) || "", 40);
     const labelShort = outTok != null ? `${fmt(outTok)} tok` : "";
     const labelFull = (outTok != null ? `${fmt(outTok)} tok · ` : "") + snippet;
-    const label = (x, y) => labelShort
+    /* At rest, label the adjacent chain only — labelling all 15 demo edges at
+       once buries the rows under text. While tracing, label exactly the traced
+       flows. Everything unlabelled still carries its <title> on hover. */
+    const showLabel = labelShort && (hiFrom === null ? !sub : hi);
+    const label = (x, y) => showLabel
       ? `<title>${esc(labelFull)}</title>
          <text x="${x}" y="${y}" text-anchor="middle" class="edgelabel">${esc(labelShort)}</text>`
       : `<title>${esc(labelFull)}</title>`;
-    if (j === i + 1) {
+    const st = seat.get(i + ">" + j) || { out: 0, in: 0 };
+    const x1 = ar.left - wr.left + 18, y1 = ar.bottom - wr.top - 2;
+    const x2 = br.left + br.width / 2 - wr.left, y2 = br.top - wr.top - 3;
+    if (!sub) {
       /* subway hop through the row gap: down → left → down into the fed chip's top */
-      const x1 = ar.left - wr.left + 18, y1 = ar.bottom - wr.top - 2;
-      const x2 = br.left + br.width / 2 - wr.left, y2 = br.top - wr.top - 3;
       const gapY = (y1 + y2) / 2;
       h += `<g>${label((x1 + x2) / 2, gapY - 4)}
         <path d="${orthPath([[x1, y1], [x1, gapY], [x2, gapY], [x2, y2]])}" ${stroke}/></g>`;
     } else {
-      /* long hop: gutter lane down, then across the free gap ABOVE the target row,
-         entering the fed chip from the top (never crosses other chips) */
-      const x1 = ar.left - wr.left + 18, y1 = ar.bottom - wr.top - 2;
-      const x2 = br.left + br.width / 2 - wr.left, y2 = br.top - wr.top - 3;
-      const gapY1 = y1 + 14;
-      const gapY2 = y2 - 12;
-      h += `<g>${label((GUTTER + x2) / 2, gapY2 - 4)}
-        <path d="${orthPath([[x1, y1], [x1, gapY1], [GUTTER, gapY1], [GUTTER, gapY2], [x2, gapY2], [x2, y2]])}" ${stroke}/></g>`;
+      /* later flow: down into its own gutter lane, then across the free gap
+         ABOVE the target row, entering the fed chip from the top (never crosses
+         other chips). The two horizontal runs are seated per row so several
+         hops leaving or arriving together stay readable. */
+      const lx = laneX(lanes.get(i + ">" + j) ?? 0);
+      const gapY1 = y1 + 8 + st.out * 5;
+      const gapY2 = y2 - 10 - st.in * 5;
+      h += `<g>${label((lx + x2) / 2, gapY2 - 4)}
+        <path d="${orthPath([[x1, y1], [x1, gapY1], [lx, gapY1], [lx, gapY2], [x2, gapY2], [x2, y2]])}" ${stroke}/></g>`;
     }
   });
   svg.innerHTML = h;

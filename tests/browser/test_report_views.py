@@ -71,6 +71,68 @@ def test_chain_view_draws_its_inferred_edges(open_report, live_report, live_data
     assert page.locator("#chain .node").count() == len(session["calls"])
 
 
+def _session_with_a_later_flow(live_data):
+    """A session whose inference found an output feeding a call beyond the next
+    one - the flows #104 is about."""
+    for i, s in enumerate(live_data["sessions"]):
+        rows = {c["id"]: n for n, c in enumerate(s["calls"])}
+        hops = [
+            e
+            for e in s.get("edges", [])
+            if e["kind"] == "output_text"
+            and e["from"] in rows
+            and e["to"] in rows
+            and rows[e["to"]] > rows[e["from"]] + 1
+        ]
+        if hops:
+            return i, s, hops
+    raise AssertionError("demo fixture carries no non-adjacent flow to test")
+
+
+def test_chain_draws_later_flows_without_a_click(open_report, live_report, live_data):
+    """#104: the default state used to draw only 'call N feeds call N+1' and
+    hid every later flow behind a click - 53% of the demo's edges, and the
+    informative half. All of them must be on screen at rest."""
+    index, session, hops = _session_with_a_later_flow(live_data)
+    page = open_report(live_report)
+    page.click('.tab[data-view="chain"]')
+    page.wait_for_selector(f'.sessrow[data-i="{index}"]')
+    page.click(f'.sessrow[data-i="{index}"]')
+    page.wait_for_selector("#chain .node")
+    page.wait_for_function("document.querySelectorAll('svg#edges path').length > 0")
+
+    # the arrowhead <marker>s in <defs> carry paths too - count only drawn edges
+    drawn = page.evaluate("() => document.querySelectorAll('svg#edges > g path').length")
+    total = len({(e["from"], e["to"]) for e in session["edges"] if e["kind"] == "output_text"})
+    assert drawn == total, f"{drawn} paths drawn for {total} inferred edges"
+    assert drawn > len(hops), "fixture must also carry adjacent edges to compare against"
+
+
+def test_chain_later_flows_get_their_own_gutter_lanes(open_report, live_report, live_data):
+    """#104: one shared lane is what made drawing them all unreadable, so the
+    lanes must actually differ once two later flows overlap in row range."""
+    index, _session, hops = _session_with_a_later_flow(live_data)
+    if len(hops) < 2:
+        pytest.skip("needs two overlapping later flows")
+    page = open_report(live_report)
+    page.click('.tab[data-view="chain"]')
+    page.click(f'.sessrow[data-i="{index}"]')
+    page.wait_for_selector("#chain .node")
+    page.wait_for_function("document.querySelectorAll('svg#edges path').length > 0")
+
+    # the vertical run of a gutter path is a same-x segment; collect the x of
+    # every straight segment and require more than a single value inside the
+    # gutter, or the lanes have collapsed back onto one another
+    xs = page.evaluate(
+        """() => [...document.querySelectorAll('svg#edges > g path')]
+             .map(p => (p.getAttribute('d').match(/L (\\d+(?:\\.\\d+)?) /g) || [])
+                        .map(s => s.slice(2).trim()))
+             .flat()"""
+    )
+    gutter_xs = {x for x in xs if float(x) < 60}  # inside --chain-gutter
+    assert len(gutter_xs) >= 2, f"later flows share one lane: {sorted(gutter_xs)}"
+
+
 def test_chain_edges_carry_a_token_count_label_and_snippet_tooltip(
     open_report, live_report, live_data
 ):

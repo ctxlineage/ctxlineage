@@ -41,6 +41,19 @@ land in minor versions).
   (#93).
 
 ### Fixed
+- Chain now draws the whole inferred lineage in its default state. Previously
+  only "call N feeds call N+1" arrows were drawn and every other flow waited
+  behind a click on an output chip — in the demo report that hid 8 of 15
+  edges (53%), and 4 of 6 in the flagship RAG session. The hidden majority
+  was the informative one: that call 2's output was still in the window at
+  call 6 is the observation the product exists to surface, while "N feeds
+  N+1" is the expected case. Later flows now route down a reserved left
+  gutter, one lane each (greedy interval colouring, so two flows share a lane
+  only when their row ranges cannot touch — a single shared lane is what made
+  drawing them all impossible before), at a lighter weight than the adjacent
+  chain. Clicking an output still isolates that call's flows, but is no
+  longer the only way to see them. Both weights are inferred the same way and
+  the view says so (#104).
 - Imported agent-loop sessions no longer show every call in one episode with
   the identical label (the human turn's own sentence) across Overview, Chain,
   the Calls sidebar and the fn card — in a real trial, 38 consecutive calls
