@@ -325,7 +325,14 @@ def _normalize_call(event: dict, span_names=None, span_tags=None) -> tuple[dict,
     call = {
         "id": event.get("call_id"),
         "span_id": span_id,
+        # per-span grouping label (spanNameOf); "action" below is per-call.
         "step": (span_names or {}).get(span_id),
+        # #88: what THIS call did, distinct from the span it belongs to - every
+        # call in an agent loop shares one span, which is exactly where a
+        # reader needs a discriminator. Only importers populate it today
+        # (claude_code.py); native capture's own per-call call_stack already
+        # serves the same purpose and is read first by the report frontend.
+        "action": payload.get("action"),
         "timestamp": event.get("timestamp"),
         "provider": payload.get("provider"),
         "api": api,

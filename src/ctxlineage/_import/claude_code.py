@@ -113,6 +113,63 @@ def _label(record: dict) -> str:
     return "turn"
 
 
+def _tool_use_names(messages: list[dict]) -> dict[str, str]:
+    """Map a tool_use block's id -> its tool name, across a message chain.
+
+    A tool_result only carries `tool_use_id` (which invocation this is the
+    result of), not the tool's name — the name lives on the earlier tool_use
+    block the id points back to.
+    """
+    names: dict[str, str] = {}
+    for message in messages:
+        content = message.get("content")
+        if not isinstance(content, list):
+            continue
+        for block in content:
+            if isinstance(block, dict) and block.get("type") == "tool_use" and block.get("id"):
+                names[block["id"]] = block.get("name") or "tool"
+    return names
+
+
+def _action_label(names: list[str]) -> str:
+    """A short chip, not a sentence (#88) - the first tool name, plus a count
+    for the rest rather than listing every one."""
+    first, extra = names[0], len(names) - 1
+    return first if not extra else f"{first} +{extra} more"
+
+
+def _call_action(request: dict, blocks: list[dict]) -> str | None:
+    """What this call did (#88), for a per-call label distinct from the
+    per-span one - every call in an agent loop shares a span, which is
+    exactly where the reader needs a discriminator.
+
+    Preferred, in order: (1) the tool(s) whose result fed this call's own
+    input - the thing it was just handed to work on; (2) the tool(s) this
+    call's own output invoked; (3) None, falling back to the span label
+    (correct for a call with no discernible tool activity, e.g. an episode's
+    first call, where the human's own request already is the right label).
+    """
+    messages = request.get("messages") or []
+    last = messages[-1] if messages else None
+    if isinstance(last, dict) and last.get("role") == "user":
+        content = last.get("content")
+        if isinstance(content, list):
+            result_ids = [
+                b.get("tool_use_id")
+                for b in content
+                if isinstance(b, dict) and b.get("type") == "tool_result" and b.get("tool_use_id")
+            ]
+            if result_ids:
+                by_id = _tool_use_names(messages)
+                return _action_label([by_id.get(i, "tool") for i in result_ids])
+    out_names = [
+        b.get("name") or "tool"
+        for b in blocks
+        if isinstance(b, dict) and b.get("type") == "tool_use"
+    ]
+    return _action_label(out_names) if out_names else None
+
+
 def _ancestry(record: dict, by_uuid: dict) -> list[dict]:
     """The record's ancestors, root-first, excluding the record itself.
 
@@ -289,6 +346,9 @@ def to_events(records: list[dict], *, path: str | Path = "") -> list[dict]:
         }
         if usage:
             payload["usage"] = usage
+        action = _call_action(request, blocks)
+        if action:
+            payload["action"] = action
         calls.append(
             {
                 "schema_version": SCHEMA_VERSION,

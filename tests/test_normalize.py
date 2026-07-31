@@ -328,6 +328,34 @@ def test_tagged_call_gets_named_segments_and_step():
     assert data["stats"]["tags"] == {"total": 1, "matched": 1, "match_rate": 1.0}
 
 
+def test_action_reads_the_payload_declaration():
+    """#88: the importer declares a per-call action; normalize.py's job here
+    is only to expose it - the report frontend picks the label preference."""
+    payload = _chat_payload(action="Read")
+    data = normalize.build_report_data([_event(payload)])
+    assert data["sessions"][0]["calls"][0]["action"] == "Read"
+
+
+def test_action_absent_for_live_capture():
+    """Live capture never sets payload['action'] (only the importer does) - the
+    call carries None, not a missing key, so frontend fallback logic can rely
+    on a stable shape."""
+    data = normalize.build_report_data([_event(_chat_payload())])
+    assert data["sessions"][0]["calls"][0]["action"] is None
+
+
+def test_action_does_not_change_the_span_derived_step():
+    """`step` (span_names-derived) and `action` (payload-derived) are
+    independent fields - #88 split them precisely so one wouldn't shadow the
+    other; a call declaring an action must still carry its real span step."""
+    events = _span_events("THE CHUNK TEXT", "Context:\nTHE CHUNK TEXT\nQ: hi")
+    events[-1]["payload"]["action"] = "Read"
+    data = normalize.build_report_data(events)
+    call = data["sessions"][0]["calls"][0]
+    assert call["step"] == "answer_query"
+    assert call["action"] == "Read"
+
+
 def test_unmatched_tag_lowers_match_rate():
     events = _span_events("text that appears nowhere at all", "Q: hi there friend")
     data = normalize.build_report_data(events)

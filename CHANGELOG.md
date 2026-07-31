@@ -35,6 +35,14 @@ land in minor versions).
   braces. Non-JSON content is unaffected (#92).
 
 ### Fixed
+- Imported agent-loop sessions no longer show every call in one episode with
+  the identical label (the human turn's own sentence) across Overview, Chain,
+  the Calls sidebar and the fn card — in a real trial, 38 consecutive calls
+  read as one repeated title. Calls now get a per-call label distinct from
+  the span/episode label: preferably the tool whose result fed this call's
+  own input, else the tool this call's own output invoked, else the existing
+  span-based fallback. Native capture is unaffected — its own per-call
+  `call_stack` already served this purpose and is still checked first (#88).
 - The INSTRUCTIONS panel and the output body now show a visible `▸`/`▾`
   toggle affordance. The panel already expanded on click; nothing on the
   page said so. The output body gained an expand toggle it previously
