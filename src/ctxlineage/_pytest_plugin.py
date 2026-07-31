@@ -30,9 +30,16 @@ from pathlib import Path
 
 import pytest
 
-from ctxlineage import _contract
-from ctxlineage._contract.runner import FAIL, SKIP, WARN
-from ctxlineage._report import normalize
+# `ctxlineage._contract` (and `_report.normalize`, which it pulls in) is
+# imported locally inside each function that needs it, not here at module
+# level. The pytest11 entry point loads this module during pytest's plugin
+# discovery, before pytest-cov attaches its tracer (same reasoning as
+# `_capture_path`'s local `ctxlineage`/`_state` import below): importing
+# anything from `_contract`, even just `runner`'s FAIL/WARN/SKIP constants,
+# first runs `_contract/__init__.py`, which re-exports from `config` ->
+# `rules` -> `_report.normalize`, pulling in the whole tree pre-coverage and
+# permanently misreporting real, exercised code as uncovered on every suite
+# run in this repo, not just this plugin's own.
 
 HEADER = "ctxlineage contracts"
 UNATTRIBUTED = "<unattributed>"
@@ -96,6 +103,8 @@ def pytest_configure(config) -> None:
 
 
 def _load_rules(config) -> list:
+    from ctxlineage import _contract
+
     given = config.getoption("--ctxlineage-config")
     path = Path(given) if given else Path(config.rootpath) / "ctxlineage.toml"
     try:
@@ -154,6 +163,8 @@ class ContractPlugin:
             return 0  # nothing recorded yet
 
     def _read(self, start: int, end: int) -> list:
+        from ctxlineage._report import normalize
+
         if end <= start:
             return []
         with self._path.open("rb") as handle:
@@ -164,6 +175,9 @@ class ContractPlugin:
 
     def _evaluate(self, label: str, events: list) -> list:
         """Run the rules over one slice; record the scope. Returns the findings."""
+        from ctxlineage import _contract
+        from ctxlineage._report import normalize
+
         if not events:
             return []
         data = normalize.build_report_data(events)
@@ -186,6 +200,8 @@ class ContractPlugin:
 
     @pytest.hookimpl(wrapper=True)
     def pytest_runtest_call(self, item):
+        from ctxlineage import _contract
+
         try:
             result = yield
         except BaseException:
@@ -207,6 +223,8 @@ class ContractPlugin:
 
     @pytest.hookimpl(tryfirst=True)
     def pytest_sessionfinish(self, session, exitstatus) -> None:
+        from ctxlineage import _contract
+
         end = self._size()
         if end > self._cursor:
             self._gaps.append((self._cursor, end))
@@ -256,6 +274,8 @@ class ContractPlugin:
         reporter.write_line(note)
 
     def _summary(self) -> str:
+        from ctxlineage._contract.runner import FAIL, SKIP, WARN
+
         findings = [f for scope in self._scopes for f in scope.findings]
         counts = {
             level: sum(1 for f in findings if f.severity == level) for level in (FAIL, WARN, SKIP)
@@ -274,6 +294,8 @@ class ContractPlugin:
 
 
 def _message(findings) -> str:
+    from ctxlineage._contract.runner import FAIL
+
     lines = [f"{f.severity.upper():<4}  {f.rule}: {f.message}" for f in findings]
     gates = sum(1 for f in findings if f.severity == FAIL)
     return "\n".join(
