@@ -1,0 +1,32 @@
+# Metamorphic contract over TWO recorded runs of examples/rag_app.py.
+#
+# The other rules in examples/ctxlineage.toml judge a single run against a
+# threshold. This one judges how the assembled context RESPONDED to a
+# deliberately perturbed input, which takes a second recording:
+#
+#     python examples/rag_app.py --mock
+#     CTXLINEAGE_DIR=.ctxlineage-shuffled python examples/rag_app.py --mock --shuffle-chunks
+#     ctxlineage test -c examples/ctxlineage-metamorphic.toml
+#
+# `--shuffle-chunks` reverses the retrieved chunk order and changes nothing
+# else, so the two runs differ only in the order rag_chunks were assembled in.
+#
+# CI runs exactly these commands (tests/test_examples.py) and also asserts the
+# gate can FAIL, so this file cannot drift from the code.
+
+[[assert.metamorphic]]
+# Paths resolve against THIS FILE's directory, never the process CWD — so a
+# run recorded at the repo root is one level up from examples/.
+variant = "../.ctxlineage-shuffled/events.jsonl"
+
+# INV: reordering retrieval must not change WHAT the context contains. Catches
+# order-sensitive dedup and order-dependent truncation — a shuffle that
+# quietly drops a chunk. Flip to "changed" and this same pair must fail, which
+# is the point: a relation you cannot fail is not a gate.
+relation = "invariant"
+
+# Required, and it must be a tag name to gate. Untagged, the chunks arrive
+# joined into one message and land as a single segment, so "same chunks,
+# reordered" is indistinguishable from "different chunks" — the rule says so
+# and warns instead of pretending to have checked.
+segment = "rag_chunks"
