@@ -6,8 +6,10 @@ description: >
   to this project", to instrument/trace/record LLM calls, to visualize or debug what
   an LLM prompt is made of, to find token waste in a RAG or agent app, to generate or
   read a ctxlineage report, to assert context contracts / gate context in CI
-  (`ctxlineage test`, `ctxlineage.toml`, window budgets, grounding checks), or to
-  import a Claude Code / `claude -p` session into a report.
+  (`ctxlineage test`, `ctxlineage.toml`, window budgets, grounding checks,
+  required-segment structure checks, golden-run regression / prompt-diff
+  testing, or invariance testing under a perturbed input), or to import a
+  Claude Code / `claude -p` session into a report.
 ---
 
 # Instrument a project with ctxlineage
@@ -192,11 +194,43 @@ max_pct = 40
 [[assert.grounded]]
 tag = "rag_chunks"       # what you retrieved must actually reach the window
 warn_dead = true         # advisory: flag chunks nothing downstream consumed
+
+[[assert.requires_segment]]
+kind = "system"          # every call must carry a system segment at all
+when_model = "gpt-*"     # optional glob: scope to matching models only
 ```
 
 ```bash
 ctxlineage test          # exit 1 on a hard-gate breach → wire into CI
 ```
+
+Two more rules compare **two recorded runs**, so they need a second run on
+disk rather than a second block in the same config. Reach for them when the
+user's worry is "did this change break something" rather than "is this call
+too big":
+
+```toml
+[[assert.segment_diff]]              # golden-run regression
+baseline = "runs/golden.jsonl"       # resolved next to this config, not the CWD
+max_token_delta = 200                # this segment may grow by at most 200 tok
+segment = "tool_defs"                # optional; omitted = the whole prompt
+
+[[assert.metamorphic]]               # invariance under a perturbed input
+variant = "runs/shuffled.jsonl"      # the same scenario, one input changed
+relation = "invariant"               # or "changed" — see below
+segment = "rag_chunks"
+```
+
+- `segment_diff` catches silent growth: a prompt template that crept, a
+  tool-definition list that doubled. Record a good run once, commit it,
+  compare every later run against it.
+- `metamorphic` catches a pipeline that responds wrongly to a changed input.
+  `invariant` = shuffling retrieval order must **not** change what the
+  context contains (catches order-sensitive dedup, order-dependent
+  truncation). `changed` = dropping a chunk **must** reach the prompt
+  (catches a `k` the code ignores). It asserts on the assembled context, not
+  on the model's answer — comparing two answers for "same meaning" is not
+  deterministic and is deliberately out of scope.
 
 **Set the numbers from what the run actually shows, not from a round number the
 user will have to fight.** Read the current share first (step 5), then set the
@@ -205,8 +239,17 @@ budget above it with headroom.
 Rules only gate where their evidence is exact, and this is not negotiable:
 
 - `window_budget` gates any call — token counts are deterministic from capture.
+- `requires_segment` gates any call too, and unlike `window_budget` never
+  demotes an absence to a warning: "required" means the absence *is* the
+  failure, so a typo'd kind fails loudly instead of passing quietly.
+- `segment_diff` gates any call — it compares two runs' own token counts.
 - `grounded` presence gates **only tagged** content: the `tag()` is the user's
   declaration, so "it never arrived" is exact. Untagged → it warns instead.
+- `metamorphic` also gates **only tagged** content, for a concrete reason:
+  untagged, the retrieved chunks arrive joined into one message and land as a
+  single segment, so "same chunks, reordered" is indistinguishable from
+  "different chunks" and the relation cannot be expressed at all. Untagged →
+  it warns and says so.
 - dead-context is **always advisory** — "nothing used it" is read off inferred
   lineage edges, and gating on inference produces a flaky build.
 
