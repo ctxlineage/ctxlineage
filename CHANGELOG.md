@@ -55,6 +55,15 @@ land in minor versions).
   ("fed") chip, even when the match was actually in a `tool`-kind segment
   (#93).
 
+- A runnable on-ramp for the two rules that compare two recorded runs:
+  `examples/rag_app.py --shuffle-chunks` records the same scenario with the
+  retrieval order reversed and nothing else changed, and
+  `examples/ctxlineage-metamorphic.toml` asserts `invariant` over the pair.
+  CI runs the documented commands and also asserts the gate can *fail* by
+  flipping the relation to `changed`, so the workflow the README prints
+  cannot drift from the code — the same guarantee `examples/ctxlineage.toml`
+  already gives the single-run rules (#109).
+
 ### Fixed
 - Imported agent-loop sessions no longer show every call in one episode with
   the identical label (the human turn's own sentence) across Overview, Chain,

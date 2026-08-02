@@ -64,18 +64,30 @@ def retrieve(query: str, k: int = 2) -> list[str]:
     return scored[:k]
 
 
-def answer_turn(client, model: str, history: list[dict], question: str) -> str:
+def answer_turn(
+    client, model: str, history: list[dict], question: str, shuffle_chunks: bool = False
+) -> str:
     """One user turn. The span/tag calls are the whole point of this example:
 
     tag exactly the object you interpolate into `messages` (the chunk list, the
     sliced history, the system string) — that is what lets the report match
     segments and draw provenance (source=) and derivation (transform=) edges.
+
+    `shuffle_chunks` reorders the retrieved chunks and nothing else. It exists
+    so this example can be recorded twice and the two runs compared — see
+    `examples/ctxlineage-metamorphic.toml`. Note the reversal happens *before*
+    the tag, so the tagged object stays the object that is interpolated below,
+    which is the one rule that makes segment matching work.
     """
     with ctxlineage.span("answer_query") as span:
         span.tag("system", SYSTEM_PROMPT, source="rag_app.py:SYSTEM_PROMPT")
 
         chunks = retrieve(question, k=2)
-        span.tag("rag_chunks", chunks, source="keyword_index:aurora_docs", transform="top_k(2)")
+        transform = "top_k(2)"
+        if shuffle_chunks:
+            chunks = list(reversed(chunks))
+            transform = "top_k(2) reversed"
+        span.tag("rag_chunks", chunks, source="keyword_index:aurora_docs", transform=transform)
 
         recent = history[-6:]
         if recent:
@@ -142,11 +154,11 @@ def mock_openai(answers: list[str]):
         yield
 
 
-def run_conversation(client, model: str) -> int:
+def run_conversation(client, model: str, shuffle_chunks: bool = False) -> int:
     history: list[dict] = []
     for question in QUESTIONS:
         print(f"\nYou: {question}")
-        print(f"Bot: {answer_turn(client, model, history, question)}")
+        print(f"Bot: {answer_turn(client, model, history, question, shuffle_chunks)}")
     return len(QUESTIONS)
 
 
@@ -154,6 +166,13 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n", 1)[0])
     parser.add_argument("--mock", action="store_true", help="run offline against canned answers")
     parser.add_argument("--model", default="gpt-4o-mini")
+    parser.add_argument(
+        "--shuffle-chunks",
+        action="store_true",
+        help="reverse the retrieved chunk order and change nothing else — record "
+        "a second run with this to compare against the first "
+        "(see examples/ctxlineage-metamorphic.toml)",
+    )
     args = parser.parse_args(argv)
 
     if not args.mock and not os.environ.get("OPENAI_API_KEY"):
@@ -172,9 +191,9 @@ def main(argv: list[str] | None = None) -> int:
         with mock_openai(MOCK_ANSWERS):
             # Pin base_url so an exported OPENAI_BASE_URL can't bypass the respx routes.
             client = openai.OpenAI(api_key="ctxlineage-mock", base_url="https://api.openai.com/v1")
-            calls = run_conversation(client, args.model)
+            calls = run_conversation(client, args.model, args.shuffle_chunks)
     else:
-        calls = run_conversation(openai.OpenAI(), args.model)
+        calls = run_conversation(openai.OpenAI(), args.model, args.shuffle_chunks)
 
     out_dir = os.environ.get("CTXLINEAGE_DIR", ".ctxlineage")
     print(f"\nRecorded {calls} LLM call(s) to {os.path.join(out_dir, 'events.jsonl')}")

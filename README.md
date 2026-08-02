@@ -187,6 +187,19 @@ ctxlineage test -c examples/ctxlineage.toml  # → All 4 assertion(s) over 3 cal
 [`examples/ctxlineage.toml`](examples/ctxlineage.toml) is a commented reference
 config; CI runs exactly the two commands above, so it cannot drift from the code.
 
+`segment_diff` and `metamorphic` compare **two** recorded runs, so they need a
+second recording rather than a second block in the same config:
+
+```bash
+python examples/rag_app.py --mock                                             # baseline
+CTXLINEAGE_DIR=.ctxlineage-shuffled python examples/rag_app.py --mock --shuffle-chunks
+ctxlineage test -c examples/ctxlineage-metamorphic.toml   # → All 1 assertion(s) over 3 call(s) passed
+```
+
+`--shuffle-chunks` reverses the retrieval order and changes nothing else, so
+the `invariant` relation must hold. CI runs these commands too — and also
+asserts the gate can *fail*, by flipping the same pair to `changed`.
+
 ### Wiring it into CI
 
 `ctxlineage test` gates a **recorded run**, so CI needs one. It does not have to

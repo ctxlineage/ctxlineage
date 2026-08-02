@@ -261,6 +261,86 @@ def test_reference_config_gates_the_rag_exemplar(tmp_path):
     assert "WARN" not in result.output
 
 
+def _metamorphic_config(tmp_path: Path, variant: Path, relation: str | None = None) -> Path:
+    """The SHIPPED metamorphic config, with only its variant path retargeted.
+
+    Copied rather than rewritten from scratch so the relation and segment under
+    test are the ones users actually get; only the path has to move, because
+    the shipped one points at a run recorded next to the repo root and these
+    runs live in tmp_path. Same trick as the tight-budget test below.
+    """
+    text = (EXAMPLES / "ctxlineage-metamorphic.toml").read_text()
+    shipped_variant = 'variant = "../.ctxlineage-shuffled/events.jsonl"'
+    assert shipped_variant in text, "the shipped config's variant line moved; retarget it here too"
+    text = text.replace(shipped_variant, f'variant = "{variant}"')
+    if relation is not None:
+        text = text.replace('relation = "invariant"', f'relation = "{relation}"')
+    path = tmp_path / "metamorphic.toml"
+    path.write_text(text)
+    return path
+
+
+def test_reference_metamorphic_config_holds_over_two_recorded_runs(tmp_path):
+    """The documented two-run workflow, end to end: record, perturb, compare.
+
+    `segment_diff` and `metamorphic` are the only rules whose user-facing
+    workflow spans two commands, so without this nothing checks that the pair
+    still works together — the unit tests exercise the rule, not the on-ramp.
+    """
+    baseline, shuffled = tmp_path / "base", tmp_path / "shuffled"
+    assert _run_example("rag_app.py", baseline, "--mock").returncode == 0
+    proc = _run_example("rag_app.py", shuffled, "--mock", "--shuffle-chunks")
+    assert proc.returncode == 0, proc.stderr
+
+    config = _metamorphic_config(tmp_path, shuffled / "events.jsonl")
+    result = CliRunner().invoke(cli_main, ["test", "-d", str(baseline), "-c", str(config)])
+    assert result.exit_code == 0, f"the shipped metamorphic config must hold:\n{result.output}"
+    # A warning here would mean nothing was actually compared — the rule
+    # degrades to advisory when the segment is untagged or unpairable, and
+    # that must not read as a passing gate.
+    assert "WARN" not in result.output, result.output
+    assert "SKIP" not in result.output, result.output
+
+
+def test_reference_metamorphic_config_can_fail(tmp_path):
+    """A relation you cannot fail is not a gate. Same two runs, flipped
+    relation: reordering did NOT change the contents, so `changed` must fail."""
+    baseline, shuffled = tmp_path / "base", tmp_path / "shuffled"
+    _run_example("rag_app.py", baseline, "--mock")
+    _run_example("rag_app.py", shuffled, "--mock", "--shuffle-chunks")
+
+    config = _metamorphic_config(tmp_path, shuffled / "events.jsonl", relation="changed")
+    result = CliRunner().invoke(cli_main, ["test", "-d", str(baseline), "-c", str(config)])
+    assert result.exit_code == 1
+    assert "FAIL" in result.output
+    assert "unchanged under the perturbation" in result.output
+
+
+def test_shuffle_chunks_really_only_reorders(tmp_path):
+    """Guard the fixture itself: if --shuffle-chunks ever changed WHICH chunks
+    were retrieved rather than their order, the invariant test above would be
+    asserting something else entirely and would still pass."""
+    baseline, shuffled = tmp_path / "base", tmp_path / "shuffled"
+    _run_example("rag_app.py", baseline, "--mock")
+    _run_example("rag_app.py", shuffled, "--mock", "--shuffle-chunks")
+
+    def chunks(run: Path) -> list[list[str]]:
+        events, _ = normalize.load_events(run / "events.jsonl")
+        data = normalize.build_report_data(events)
+        return [
+            [s["content"] for s in call["segments"] if s.get("kind") == "rag_chunks"]
+            for session in data["sessions"]
+            for call in session["calls"]
+        ]
+
+    base_chunks, shuffled_chunks = chunks(baseline), chunks(shuffled)
+    assert base_chunks and all(base_chunks), "the fixture must actually tag rag_chunks"
+    assert base_chunks != shuffled_chunks, "--shuffle-chunks must change the order"
+    assert [sorted(c) for c in base_chunks] == [sorted(c) for c in shuffled_chunks], (
+        "--shuffle-chunks must not change WHICH chunks were retrieved"
+    )
+
+
 def test_reference_config_fails_a_run_that_breaks_it(tmp_path):
     """The gate must be able to fail, or passing means nothing."""
     proc = _run_example("rag_app.py", tmp_path, "--mock")
