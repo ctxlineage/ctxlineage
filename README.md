@@ -383,9 +383,11 @@ matched values are replaced before anything is written to disk.
 **v0.2.1** — the capture layer (openai + anthropic), the four-view report, the
 span/tag lineage pipeline, the read-only MCP server, and runnable examples, plus:
 
-- **`ctxlineage test`** — deterministic context contracts (`window_budget`,
-  `grounded`) that gate a recorded run in CI, and a **pytest plugin**
-  (`pytest --ctxlineage`) that attributes a breach to the test that caused it.
+- **`ctxlineage test`** — deterministic context contracts that gate a recorded
+  run in CI (`window_budget`, `requires_segment`, `segment_diff`,
+  `metamorphic`, `grounded` — one for each assertion class), and a **pytest
+  plugin** (`pytest --ctxlineage`) that attributes a breach to the test that
+  caused it.
 - **`ctxlineage import --from claude-code`** — bring a Claude Code / `claude -p`
   session into the same report, honest about what a transcript cannot preserve.
 
