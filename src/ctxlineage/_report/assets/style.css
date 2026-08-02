@@ -10,6 +10,13 @@
   --src-bg: #eef2f5; --edge-dim: rgba(107, 118, 130, .35);
   --edge: rgba(31, 191, 174, .75); --edge-hi: #11897d;
   --tag1: #3BA55D; --tag2: #D0699E; --tag3: #3FA7BD; --tag4: #9A8F2B; --tag5: #C46B5A;
+  /* #104: reserved gutter down the left of the chain rows. Every non-adjacent
+     output->input flow is routed here, one lane each. renderChain() rewrites
+     this per session from the lane count and drawEdges() reads it back to
+     place the lanes, so the routing and this padding cannot drift apart —
+     shrink it and the lanes move in with it. This value is the floor used
+     before a session is drawn. */
+  --chain-gutter: 40px;
 }
 [data-theme="dark"] {
   --bg: #1b2026; --panel: #252B33; --text: #e8ecf1; --muted: #94a0ac;
@@ -87,7 +94,11 @@ main { padding: 20px 24px 40px; overflow-y: auto; position: relative; }
        border-radius: 8px; padding: 8px 12px; margin-bottom: 8px; cursor: pointer; }
 .seg .top { display: flex; justify-content: space-between; gap: 8px; }
 .seg .kind { font-weight: 700; font-size: 12px; }
-.seg .share { font-size: 11.5px; color: var(--muted); }
+/* #103: the token cost leads, the shares are context for it — one glance
+   target per segment instead of three numbers at one weight. */
+.seg .share { font-size: 11.5px; color: var(--muted); white-space: nowrap; }
+.seg .share b { color: var(--text); font-weight: 700; }
+.seg .share .pct { opacity: .8; }
 .seg .preview { color: var(--muted); font-size: 12px; white-space: nowrap; overflow: hidden;
                 text-overflow: ellipsis; margin-top: 2px; }
 .seg .full { display: none; margin-top: 8px; font: 12px/1.5 ui-monospace, monospace;
@@ -117,6 +128,12 @@ main { padding: 20px 24px 40px; overflow-y: auto; position: relative; }
 .fn .row { display: flex; justify-content: space-between; font-size: 12px;
            color: var(--fn-muted); margin-top: 6px; }
 .fn .row span:last-child { color: var(--fn-text); }
+/* #103: cost is the one number worth reading in this card; the fixed facts
+   (api, duration, mode) collapse to one quiet line, as .fnpill already does. */
+.fn .cost { margin-top: 10px; font-size: 12px; color: var(--fn-muted); }
+.fn .cost b { font-size: 17px; font-weight: 700; color: var(--fn-text); margin-right: 2px; }
+.fn .cost span { margin-left: 6px; }
+.fn .meta { font-size: 11.5px; color: var(--fn-muted); margin-top: 3px; }
 .fn .instr { margin-top: 10px; border-top: 1px dashed rgba(148, 160, 172, .4); padding-top: 8px;
              cursor: pointer; }
 .fn .instr .lbl { font-size: 11px; letter-spacing: .06em; text-transform: uppercase;
@@ -160,6 +177,12 @@ main { padding: 20px 24px 40px; overflow-y: auto; position: relative; }
 .jbranch[open] > summary::before { content: "▾ "; }
 .jbranch > .jchildren { margin-left: 16px; padding-left: 8px;
                         border-left: 1px dashed var(--border); }
+/* #103: declared structure carried through from the provider's own blocks,
+   shown under the text it was flattened into rather than instead of it. */
+.jstruct { margin-top: 8px; border-top: 1px dashed var(--border); padding-top: 6px; }
+.jstruct .jhead { font-size: 11px; letter-spacing: .06em; text-transform: uppercase;
+                  color: var(--muted); margin-bottom: 3px; }
+.jstruct .jhead .jkind { text-transform: none; letter-spacing: 0; }
 .stackline { margin-top: 18px; font-size: 11.5px; color: var(--muted); }
 
 /* chain view */
@@ -175,7 +198,7 @@ svg#edges .edgelabel { font: 600 10.5px ui-monospace, monospace; fill: var(--mut
                         pointer-events: auto; cursor: default; }
 .node { position: relative; z-index: 1; display: grid;
         grid-template-columns: minmax(250px, 1.1fr) minmax(190px, .8fr) minmax(230px, 1fr);
-        gap: 18px; align-items: center; padding: 10px 0 26px 40px; }
+        gap: 18px; align-items: center; padding: 10px 0 26px var(--chain-gutter); }
 .chips { display: flex; flex-wrap: wrap; gap: 6px; justify-content: flex-end; }
 .chip { font-size: 11.5px; font-weight: 600; border-radius: 6px; padding: 3px 9px;
         border: 1px solid var(--border); background: var(--panel); }

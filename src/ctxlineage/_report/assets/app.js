@@ -73,6 +73,30 @@ const jsonTreeHtml = (value, depth = 0) => {
   }).join("")}</div>`;
 };
 
+/* ---------- #103: structure the provider declared, not structure we guessed ----------
+   parseJsonMaybe above only fires when a whole body parses, which across the
+   demo report meant 3 of 64 segments and 0 of 15 outputs — every one of them a
+   tool_defs blob. The richest structure in an agent trace, a tool call's own
+   arguments, arrives wrapped as `[tool_use: Read({...})]` and never parsed.
+   normalize.py now carries those arguments through as `structured` instead of
+   flattening them away, so this renders declared structure and never sniffs. */
+const STRUCT_LABEL = { tool_call: "tool call" };
+const structLabel = (s) =>
+  `${STRUCT_LABEL[s.kind] ?? s.kind}${s.name ? " · " + s.name : ""}`;
+const structOf = (item) => (item && Array.isArray(item.structured) ? item.structured : []);
+const structChip = (list) => list.length
+  ? `<span class="jkind">${esc(list.map(structLabel).join(" · "))}</span>` : "";
+/* Emitted on one line on purpose: this lands inside `.full`/`.body`, which are
+   `white-space: pre-wrap` so the raw text keeps its own formatting. A newline
+   in the markup would render as a blank line in the page. */
+const structHtml = (list) => list.map((s) => {
+  const branch = s.value !== null && typeof s.value === "object";
+  const head = `<div class="jhead">${esc(structLabel(s))}${
+    branch ? ` · <span class="jkind">${esc(jsonKind(s.value))}</span>` : ""}</div>`;
+  const body = branch ? jsonTreeHtml(s.value) : `<div class="jrow">${esc(jsonLeafText(s.value))}</div>`;
+  return `<div class="jstruct">${head}${body}</div>`;
+}).join("");
+
 const stepOf = (c) => {
   // label split (design decision 6, extended by #88): the span name is
   // grouping info (spanNameOf - brackets, fn-card "span" row), never this.
@@ -93,6 +117,7 @@ let selCall = 0;
 let selSession = 0;
 let hiFrom = null;
 let chainEdges = [];
+let chainLanes = null;   // lane assignment for the current session, sized by renderChain
 
 const calls = [];
 data.sessions.forEach((s, si) => s.calls.forEach((c) => calls.push({ s, si, c })));
@@ -315,17 +340,24 @@ function renderCallDetail() {
   const segs = rest.map((g) => {
     const ws = !g.content.trim();
     const parsed = ws ? null : parseJsonMaybe(g.content);
+    const struct = structOf(g);
     // Structure at a glance in the collapsed preview too - "json object · 6
-    // keys" answers "what is this?" without reading a character of it.
+    // keys", or "tool call · Read", answers "what is this?" without reading a
+    // character of it.
     const preview = ws ? "(whitespace separator)"
-      : parsed ? `<span class="jkind">${esc(jsonKind(parsed))}</span>` : esc(clip(g.content, 90));
+      : parsed ? `<span class="jkind">${esc(jsonKind(parsed))}</span>`
+      : struct.length ? structChip(struct) + " " + esc(clip(g.content, 70))
+      : esc(clip(g.content, 90));
     const full = ws ? "(whitespace only — separates the surrounding segments)"
-      : parsed ? jsonTreeHtml(parsed) : esc(g.content);
+      : parsed ? jsonTreeHtml(parsed) : esc(g.content) + structHtml(struct);
+    // #103: one number leads. The token cost is what a reader is here for; the
+    // shares are context for it, not peers of it.
     return `
     <div class="seg ${ws ? "ws" : ""}" style="border-left-color:${kindColor(g.kind)}">
       <div class="top"><span class="kind" style="color:${kindColor(g.kind)}">${esc(segLabel(g))}</span>
-        <span class="share">${fmt(g.tokens_est)} tok · ${(100 * g.tokens_est / total).toFixed(0)}% of prompt${
-          showRecovered ? ` · ${(100 * g.tokens_est / segTotal).toFixed(0)}% of recovered` : ""}</span></div>
+        <span class="share"><b>${fmt(g.tokens_est)}</b> tok ·
+          <span class="pct">${(100 * g.tokens_est / total).toFixed(0)}% of prompt${
+          showRecovered ? ` · ${(100 * g.tokens_est / segTotal).toFixed(0)}% of recovered` : ""}</span></span></div>
       <div class="preview" dir="auto">${preview}</div>
       <div class="full" dir="auto">${full}</div>
     </div>`;
@@ -343,29 +375,41 @@ function renderCallDetail() {
       <div class="txt">${esc(sys.map((g) => g.content).join("\n\n"))}</div>
     </div>` : "";
 
+  // #103: the card used to render api / duration / mode / span / usage as five
+  // identical label-value rows, so nothing led. Across the demo report `api`
+  // has two distinct values, `mode` reads "sync" on 15 of 16 calls and
+  // `duration` is empty on every imported one — three rows of near-constant
+  // boilerplate carrying the same weight as the one number worth reading.
+  // Rank them: what ran, what it cost, then the fixed facts on one quiet line
+  // — the shape .fnpill in the Chain view already uses.
+  const meta = [c.api, c.duration_ms ? c.duration_ms.toFixed(0) + " ms" : null,
+                c.stream ? "streaming" : "sync"].filter(Boolean);
   const fn = `
     <div class="fn">
       <div class="stepname">${esc(stepOf(c) ?? "llm call")}()</div>
       <div class="model">${esc(c.model)}</div>
-      <div class="row"><span>api</span><span>${esc(c.api)}</span></div>
-      <div class="row"><span>duration</span><span>${c.duration_ms ? c.duration_ms.toFixed(0) + " ms" : "–"}</span></div>
-      <div class="row"><span>mode</span><span>${c.stream ? "streaming" : "sync"}</span></div>
-      ${spanNameOf(c) && spanNameOf(c) !== stepOf(c) ? `<div class="row"><span>span</span><span>${esc(spanNameOf(c))}</span></div>` : ""}
-      ${c.usage ? `<div class="row"><span>usage</span><span>${fmt(c.usage.total_tokens)} tok</span></div>` : ""}
+      ${c.usage ? `<div class="cost"><b>${fmt(c.usage.total_tokens)}</b> tok
+        <span>${fmt(c.usage.prompt_tokens)} in · ${fmt(c.usage.completion_tokens)} out</span></div>` : ""}
+      <div class="meta">${esc(meta.join(" · "))}</div>
+      ${spanNameOf(c) && spanNameOf(c) !== stepOf(c)
+        ? `<div class="row"><span>span</span><span>${esc(spanNameOf(c))}</span></div>` : ""}
       ${instr}
     </div>`;
 
   const outContent = c.output ? c.output.content : "";
   const outParsed = c.error ? null : parseJsonMaybe(outContent);
+  const outStruct = c.error ? [] : structOf(c.output);
   const out = c.error
     ? `<div class="out error"><div class="head"><span>error</span><span>${esc(c.error.type)}</span></div>
        <div class="body">${esc(c.error.message)}</div></div>`
     : `<div class="out" id="outwrap"><div class="head"><span class="ol">llm output${
-         outParsed ? ` · <span class="jkind">${esc(jsonKind(outParsed))}</span>` : ""
+         outParsed ? ` · <span class="jkind">${esc(jsonKind(outParsed))}</span>`
+           : outStruct.length ? " · " + structChip(outStruct) : ""
        }</span>
          <span>${c.usage ? fmt(c.usage.completion_tokens) + " tok · " : ""}${esc(c.output && c.output.finish_reason || "")}
          <b class="toggle" title="show all / show less">▸</b></span></div>
-       <div class="body" dir="auto">${outParsed ? jsonTreeHtml(outParsed) : esc(outContent)}</div></div>`;
+       <div class="body" dir="auto">${outParsed ? jsonTreeHtml(outParsed)
+         : esc(outContent) + structHtml(outStruct)}</div></div>`;
 
   main.innerHTML = `
     <div class="callhead"><h2>call ${selCall + 1}</h2>
@@ -499,6 +543,14 @@ function renderChain() {
   const edges = findEdges(s);
   const loops = findLoops(s, edges);
   chainEdges = edges;  // cache for drawEdges (avoid recomputing per frame)
+  // Size the gutter before the rows lay out: .node's padding-left reads this
+  // token, and drawEdges reads it back to place the lanes, so one number
+  // drives both. Lanes are assigned here rather than in drawEdges because the
+  // count is what the width is derived from.
+  chainLanes = assignLanes(edges.filter(([i, j]) => j > i + 1));
+  const laneN = laneCount(chainLanes);
+  const shared = sharedLanes(laneN);
+  document.body.style.setProperty("--chain-gutter", gutterFor(laneN) + "px");
   const targets = hiFrom === null ? [] : edges.filter((e) => e[0] === hiFrom).map((e) => e[1]);
   const dsMap = new Map();
   edges.forEach(([a, b]) => { if (b > a + 1) dsMap.set(a, (dsMap.get(a) || 0) + 1); });
@@ -511,7 +563,8 @@ function renderChain() {
       <span><i style="background:var(--tool)"></i>tool/MCP</span>
       <span><i style="background:var(--tooldef)"></i>tool defs</span></div>
     <p class="sesshead">session <b>${esc(s.id)}</b> — ${s.calls.length} calls, time flows ↓ ;
-      <b>↳ n</b> = feeds n later calls beyond the next (click an output to trace)</p>`;
+      bold arrows feed the next call, thin gutter arrows feed a later one
+      (<b>↳ n</b> = how many). Click an output to trace just its flows.</p>`;
   let body = "";
   let i = 0;
   while (i < s.calls.length) {
@@ -529,8 +582,12 @@ function renderChain() {
     }
   }
   main.innerHTML = `${h}<div id="wrap"><svg id="edges"></svg><div id="chain">${body}</div></div>
-    <div class="note">edges are inferred from the data — an output's text found inside a later
-    call's input. Tagging (span API) will add source-level precision.</div>`;
+    <div class="note">every arrow here, next-call and later-call alike, is inferred from the
+    data — an output's text found inside a later call's input. Tagging (span API) will add
+    source-level precision.${shared
+      ? ` This session fans out past the gutter's ${GUTTER_LANES} lanes:
+          <b>${shared} later flows share the outermost lane</b> and cannot be told apart
+          there — click an output to isolate one.` : ""}</div>`;
   main.querySelectorAll(".outchip").forEach((el) =>
     el.addEventListener("click", () => {
       hiFrom = hiFrom === +el.dataset.i ? null : +el.dataset.i; render();
@@ -554,6 +611,40 @@ function orthPath(pts, r = 8) {
   return d;
 }
 
+/* #104: lanes for the non-adjacent flows, by greedy interval colouring over the
+   row ranges they span. Two hops share a lane only when their ranges cannot
+   touch. Before this, every hop was routed at one shared x — which is why
+   drawing them all at rest was not an option and they were hidden behind a
+   click instead. Ranges that merely meet at a row (2->4 and 4->6) are treated
+   as conflicting, so the shared row never reads as one continuous line. */
+const GUTTER_LANES = 8;   // most lanes drawn side by side before they share
+const LANE_X0 = 22, LANE_W = 8, GUTTER_PAD = 12, GUTTER_MIN = 40;
+function assignLanes(hops) {
+  const lane = new Map();
+  const lastRow = [];
+  [...hops].sort((a, b) => a[0] - b[0] || a[1] - b[1]).forEach(([i, j]) => {
+    let k = lastRow.findIndex((end) => end < i);
+    if (k === -1) k = lastRow.length;
+    lastRow[k] = j;
+    lane.set(i + ">" + j, k);
+  });
+  return lane;
+}
+const laneCount = (lanes) => (lanes.size ? Math.max(...lanes.values()) + 1 : 0);
+/* assignLanes is unbounded — one source call may fan out to _MAX_EDGES_PER_SOURCE
+   (32) later calls, all overlapping, so it can hand back lane 31. Folding that
+   into a fixed number of slots with `%` would put lane 5 back on lane 0's x and
+   silently restore the overprint the allocator exists to prevent. Grow the
+   gutter with the lanes instead, and past the cap let the outermost lane be
+   shared *and say so* — 31 parallel lines separate nothing anyway, and
+   click-to-trace still resolves any single flow. */
+const laneSlot = (k) => Math.min(k, GUTTER_LANES - 1);
+const gutterFor = (n) =>
+  Math.max(GUTTER_MIN, LANE_X0 + Math.min(n, GUTTER_LANES) * LANE_W + GUTTER_PAD);
+const sharedLanes = (n) => (n > GUTTER_LANES ? n - GUTTER_LANES + 1 : 0);
+const SEAT_MAX = 3;   // horizontal runs stacked in one row gap before they stop spreading
+const seatOff = (n) => Math.min(n, SEAT_MAX) * 5;
+
 function drawEdges() {
   const svg = document.getElementById("edges");
   const wrap = document.getElementById("wrap");
@@ -563,20 +654,39 @@ function drawEdges() {
   const wr = wrap.getBoundingClientRect();
   svg.setAttribute("viewBox", `0 0 ${wr.width} ${wr.height}`);
   const bodyStyle = getComputedStyle(document.body);
-  let h = `<defs>
-    <marker id="arr" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
-      <path d="M0,0 L10,5 L0,10 z" fill="${bodyStyle.getPropertyValue("--edge").trim() || "#1FBFAE"}"/></marker>
-    <marker id="arrhi" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
-      <path d="M0,0 L10,5 L0,10 z" fill="${bodyStyle.getPropertyValue("--edge-hi").trim() || "#11897d"}"/></marker>
-  </defs>`;
+  /* Markers reference the tokens directly rather than a getComputedStyle
+     round-trip, so no resolved hex is ever written into the markup — the
+     Graph view's own markers already do this. Markers cannot inherit the
+     path's stroke-opacity, so the quieter weights need their own arrowhead
+     rather than one shared marker. */
+  const arrow = (id, token, w, op) =>
+    `<marker id="${id}" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="${w}"
+       markerHeight="${w}" orient="auto-start-reverse">
+       <path d="M0,0 L10,5 L0,10 z" fill="var(${token})" fill-opacity="${op}"/></marker>`;
+  let h = `<defs>${arrow("arr", "--edge", 7, 1)}${arrow("arrhi", "--edge-hi", 8, 1)}
+    ${arrow("arrsub", "--edge", 6, 0.55)}${arrow("arrdim", "--edge-dim", 6, 1)}</defs>`;
   const all = chainEdges.length ? chainEdges : findEdges(s);
-  /* default: only the quiet adjacent chain; click an output to fan out its downstream */
-  const visible = hiFrom === null
-    ? all.filter(([i, j]) => j === i + 1)
-    : all.filter(([i]) => i === hiFrom);
-  /* vertical channel inside the number gutter (nodes have 40px left padding) */
-  const GUTTER = 24;
-  visible.forEach(([i, j]) => {
+  /* #104: everything is drawn at rest. Adjacent hops keep the full-weight
+     subway hop through the row gap; the later flows — the ones worth the
+     product's name, and 53% of all edges in the demo report — run quietly
+     down the gutter instead of waiting for a click. Clicking now promotes one
+     source's flows and dims the rest, rather than being the only way to see
+     them at all. */
+  const lanes = chainLanes ?? assignLanes(all.filter(([i, j]) => j > i + 1));
+  /* Several hops can leave one row or arrive at another; stagger their
+     horizontal runs through the row gap so they stack instead of overprinting. */
+  const outN = new Map(), inN = new Map();
+  const seat = new Map();
+  const bump = (m, k) => { const n = m.get(k) || 0; m.set(k, n + 1); return n; };
+  [...all].sort((a, b) => a[0] - b[0] || a[1] - b[1]).forEach(([i, j]) => {
+    seat.set(i + ">" + j, { out: bump(outN, i), in: bump(inN, j) });
+  });
+  /* Lane x is derived from the live --chain-gutter that renderChain sized, so
+     the routing and the row padding cannot disagree: shrink the token and the
+     lanes move in with it rather than sliding under the row content. */
+  const gutter = parseFloat(bodyStyle.getPropertyValue("--chain-gutter")) || GUTTER_MIN;
+  const laneX = (k) => Math.min(LANE_X0 + laneSlot(k) * LANE_W, gutter - GUTTER_PAD);
+  all.forEach(([i, j]) => {
     const a = document.querySelector(`.node[data-n="${i}"] .outchip`);
     const bNode = document.querySelector(`.node[data-n="${j}"]`);
     // #93: which segment the match actually landed in, so the arrow can
@@ -601,9 +711,13 @@ function drawEdges() {
     if (!a || !b) return;
     const ar = a.getBoundingClientRect(), br = b.getBoundingClientRect();
     const hi = hiFrom === i;
-    const stroke = `stroke="${hi ? "var(--edge-hi)" : "var(--edge)"}"
-      stroke-width="${hi ? 2.5 : 2}" fill="none" stroke-linejoin="round"
-      marker-end="url(#${hi ? "arrhi" : "arr"})"`;
+    const sub = j > i + 1;                     // a later flow, not the next call
+    const dim = hiFrom !== null && !hi;        // something else is being traced
+    const marker = hi ? "arrhi" : dim ? "arrdim" : sub ? "arrsub" : "arr";
+    const stroke = `stroke="${hi ? "var(--edge-hi)" : dim ? "var(--edge-dim)" : "var(--edge)"}"
+      stroke-width="${hi ? 2.5 : sub ? 1.5 : 2}"
+      ${sub && !hi && !dim ? 'stroke-opacity=".55"' : ""}
+      fill="none" stroke-linejoin="round" marker-end="url(#${marker})"`;
     // #93: what flowed, not just that something did - a token count (the
     // source call's own reported output size) plus a snippet of the matched
     // text. Free: the matched substring is what created the edge already.
@@ -611,26 +725,35 @@ function drawEdges() {
     const snippet = clip((s.calls[i].output && s.calls[i].output.content) || "", 40);
     const labelShort = outTok != null ? `${fmt(outTok)} tok` : "";
     const labelFull = (outTok != null ? `${fmt(outTok)} tok · ` : "") + snippet;
-    const label = (x, y) => labelShort
+    /* At rest, label the adjacent chain only — labelling all 15 demo edges at
+       once buries the rows under text. While tracing, label exactly the traced
+       flows. Everything unlabelled still carries its <title> on hover. */
+    const showLabel = labelShort && (hiFrom === null ? !sub : hi);
+    const label = (x, y) => showLabel
       ? `<title>${esc(labelFull)}</title>
          <text x="${x}" y="${y}" text-anchor="middle" class="edgelabel">${esc(labelShort)}</text>`
       : `<title>${esc(labelFull)}</title>`;
-    if (j === i + 1) {
+    const st = seat.get(i + ">" + j) || { out: 0, in: 0 };
+    const x1 = ar.left - wr.left + 18, y1 = ar.bottom - wr.top - 2;
+    const x2 = br.left + br.width / 2 - wr.left, y2 = br.top - wr.top - 3;
+    if (!sub) {
       /* subway hop through the row gap: down → left → down into the fed chip's top */
-      const x1 = ar.left - wr.left + 18, y1 = ar.bottom - wr.top - 2;
-      const x2 = br.left + br.width / 2 - wr.left, y2 = br.top - wr.top - 3;
       const gapY = (y1 + y2) / 2;
       h += `<g>${label((x1 + x2) / 2, gapY - 4)}
         <path d="${orthPath([[x1, y1], [x1, gapY], [x2, gapY], [x2, y2]])}" ${stroke}/></g>`;
     } else {
-      /* long hop: gutter lane down, then across the free gap ABOVE the target row,
-         entering the fed chip from the top (never crosses other chips) */
-      const x1 = ar.left - wr.left + 18, y1 = ar.bottom - wr.top - 2;
-      const x2 = br.left + br.width / 2 - wr.left, y2 = br.top - wr.top - 3;
-      const gapY1 = y1 + 14;
-      const gapY2 = y2 - 12;
-      h += `<g>${label((GUTTER + x2) / 2, gapY2 - 4)}
-        <path d="${orthPath([[x1, y1], [x1, gapY1], [GUTTER, gapY1], [GUTTER, gapY2], [x2, gapY2], [x2, y2]])}" ${stroke}/></g>`;
+      /* later flow: down into its own gutter lane, then across the free gap
+         ABOVE the target row, entering the fed chip from the top (never crosses
+         other chips). The two horizontal runs are seated per row so several
+         hops leaving or arriving together stay readable. */
+      const lx = laneX(lanes.get(i + ">" + j) ?? 0);
+      // Seats are unbounded (a source can feed many later calls) but the row
+      // gap is not: past a few, an unclamped offset walks the horizontal run
+      // into the neighbouring row and across its fn pill.
+      const gapY1 = y1 + 8 + seatOff(st.out);
+      const gapY2 = y2 - 10 - seatOff(st.in);
+      h += `<g>${label((lx + x2) / 2, gapY2 - 4)}
+        <path d="${orthPath([[x1, y1], [x1, gapY1], [lx, gapY1], [lx, gapY2], [x2, gapY2], [x2, y2]])}" ${stroke}/></g>`;
     }
   });
   svg.innerHTML = h;
@@ -705,9 +828,24 @@ function renderGraphView() {
   // tagging nothing (hasElements false with real span_ids). The span
   // bracket below sits at `COLX.call - 16`; 10 would put it at negative x,
   // bleeding past the SVG's own left edge (found by adversarial review).
+  // Lanes must be known before the columns are placed: in the collapsed layout
+  // the call column's x is what leaves room for them.
+  const callIdx = new Map(s.calls.map((c, i) => ["call:" + c.id, i]));
+  const flowHops = g.edges
+    .filter((e) => e.kind === "flows")
+    .map((e) => [callIdx.get(e.from), callIdx.get(e.to)])
+    .filter(([a, b]) => a != null && b != null && b > a + 1);
+  const flowLanes = assignLanes(flowHops);
+  const flowLaneN = Math.min(laneCount(flowLanes), GUTTER_LANES);
+  const GLANE_W = 14, GLANE_X0 = 20;
+  // #102: in the collapsed layout the call column also has to leave room for
+  // the flow gutter that moves to its left (see laneX below) and for the span
+  // bracket at `COLX.call - 16` that sits between the two. Derived from the
+  // lane count, not fixed: lanes used to fold `% 5`, which capped the width by
+  // silently stacking flow 6 onto flow 1's x.
   const COLX = hasElements
     ? { source: 10, element: 260, call: 560 }
-    : { source: 10, element: 10, call: 30 };
+    : { source: 10, element: 10, call: Math.max(120, GLANE_X0 + flowLaneN * GLANE_W + 30) };
   const W = { source: 210, element: 250, call: 240 };
   const H = { source: 34, element: 46, call: 52 };
   const GAPY = 26;
@@ -732,7 +870,20 @@ function renderGraphView() {
   srcs.forEach((n) => { y[n.id] = Math.max(n.want, cursor); cursor = y[n.id] + H.source + GAPY; });
 
   const height = Object.values(y).reduce((a, b) => Math.max(a, b), 60) + 120;
-  const laneBase = COLX.call + W.call + 30;
+  // #102: the flow gutter goes wherever the free space is. With the source and
+  // element columns present, the left edge of every call box is already taken
+  // by incoming provenance edges, so the gutter belongs on the right — that is
+  // the layout it was designed for. Once those columns collapse there are no
+  // provenance edges at all, and a right-hand gutter leaves the flows swinging
+  // out into blank canvas, pointing at nothing. Then the free side is the left.
+  // Collapsed: lanes fill rightward from the left edge, ending just short of
+  // the span bracket. Three-column: rightward from past the call column. Both
+  // clamp to the last slot rather than wrapping onto an occupied one.
+  const laneBase = hasElements ? COLX.call + W.call + 30 : GLANE_X0;
+  const laneX = (k) => laneBase + laneSlot(k) * GLANE_W;
+  const svgW = hasElements
+    ? laneBase + flowLaneN * GLANE_W + 80
+    : COLX.call + W.call + 30;
   const maxTok = els.reduce((a, n) => Math.max(a, n.tok || 0), 1);
   const nodeDim = (id) => (lit && !lit.has(id) ? "dimmed" : "");
   const edgeLit = (e) => lit && lit.has(e.from) && lit.has(e.to);
@@ -746,16 +897,29 @@ function renderGraphView() {
   </defs>`;
 
   let eh = "";
-  let lane = 0;
+  let lanesUsed = 0;
   g.edges.forEach((e) => {
     const hi = edgeLit(e);
     if (e.kind === "flows") {
-      const x1 = COLX.call + W.call, y1 = y[e.from] + H.call / 2;
-      const y2 = y[e.to] + H.call / 2;
-      const lx = laneBase + (lane++ % 5) * 14;
-      eh += `<path d="M ${x1} ${y1} L ${lx - 8} ${y1} Q ${lx} ${y1} ${lx} ${y1 + 8} L ${lx} ${y2 - 8} Q ${lx} ${y2} ${lx - 8} ${y2} L ${x1 + 2} ${y2}"
-        fill="none" stroke="${edgeStroke(e)}" stroke-width="${hi ? 2.5 : 1.8}" stroke-linejoin="round"
-        marker-end="url(#${hi ? "garrhi" : "garr"})"/>`;
+      const fi = callIdx.get(e.from), ti = callIdx.get(e.to);
+      const stroke = `fill="none" stroke="${edgeStroke(e)}" stroke-width="${hi ? 2.5 : 1.8}"
+        stroke-linejoin="round" marker-end="url(#${hi ? "garrhi" : "garr"})"`;
+      if (fi != null && ti === fi + 1) {
+        // feeds the very next call: say it with the shortest line that can —
+        // straight down the gap between two stacked boxes. No gutter needed,
+        // and "time flows down" becomes literal rather than implied.
+        const cx = COLX.call + W.call / 2;
+        eh += `<path d="M ${cx} ${y[e.from] + H.call} L ${cx} ${y[e.to] - 2}" ${stroke}/>`;
+        return;
+      }
+      const lx = laneX(flowLanes.get(fi + ">" + ti) ?? 0);
+      lanesUsed += 1;
+      const y1 = y[e.from] + H.call / 2, y2 = y[e.to] + H.call / 2;
+      // exit and re-enter on whichever side the gutter is on
+      const dir = hasElements ? 1 : -1;
+      const x1 = hasElements ? COLX.call + W.call : COLX.call;
+      eh += `<path d="M ${x1} ${y1} L ${lx - 8 * dir} ${y1} Q ${lx} ${y1} ${lx} ${y1 + 8}
+        L ${lx} ${y2 - 8} Q ${lx} ${y2} ${lx - 8 * dir} ${y2} L ${x1 + 2 * dir} ${y2}" ${stroke}/>`;
     } else {
       const fromType = e.from.startsWith("src:") ? "source" : "element";
       const x1 = COLX[fromType] + W[fromType], y1 = y[e.from] + H[fromType] / 2;
@@ -815,10 +979,13 @@ function renderGraphView() {
     }
   });
 
+  const head = (x, t, anchor) =>
+    `<text style="fill:var(--muted)" font-size="11" letter-spacing=".08em" x="${x}" y="16"
+       ${anchor ? `text-anchor="${anchor}"` : ""}>${t}</text>`;
   const heads = `
-    ${hasElements ? `<text style="fill:var(--muted)" font-size="11" letter-spacing=".08em" x="${COLX.source}" y="16">SOURCES</text>
-    <text style="fill:var(--muted)" font-size="11" letter-spacing=".08em" x="${COLX.element}" y="16">CONTEXT ELEMENTS</text>` : ""}
-    <text style="fill:var(--muted)" font-size="11" letter-spacing=".08em" x="${COLX.call}" y="16">LLM CALLS ↓ TIME</text>`;
+    ${hasElements ? head(COLX.source, "SOURCES") + head(COLX.element, "CONTEXT ELEMENTS") : ""}
+    ${head(COLX.call, "LLM CALLS ↓ TIME")}
+    ${lanesUsed ? head(laneBase, "FLOWS") : ""}`;
 
   // Untagged banner: actionable for a native-capture user (they can tag);
   // honest, not actionable, for an imported session (tagging is structurally
@@ -831,9 +998,11 @@ function renderGraphView() {
       : "Wrap calls in <b>ctxlineage.span()</b> and <b>tag()</b> your chunks/prompts to see where context comes from."
     } Output→input flows are still shown below.</div>`;
   main.innerHTML = `<div id="graphwrap">${hint}
-    <svg width="${laneBase + 110}" height="${height}" style="overflow:visible">${defs}${bh}${heads}${eh}${nh}</svg>
+    <svg width="${svgW}" height="${height}" style="overflow:visible">${defs}${bh}${heads}${eh}${nh}</svg>
     <div class="note">click any node to trace its lineage (upstream + downstream); click again to clear.
-    dashed element = tagged but never matched.</div></div>`;
+    dashed element = tagged but never matched.${sharedLanes(laneCount(flowLanes))
+      ? ` <b>${sharedLanes(laneCount(flowLanes))} later flows share the outermost lane</b>
+          and cannot be told apart there — click a call to trace one.` : ""}</div></div>`;
   main.querySelectorAll(".nodebox").forEach((el) =>
     el.addEventListener("click", () => {
       graphFocus = graphFocus === el.dataset.id ? null : el.dataset.id;

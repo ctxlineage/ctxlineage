@@ -135,6 +135,44 @@ def _content_to_text(content) -> str:
     return "" if content is None else str(content)
 
 
+def _structured_parts(content) -> list[dict]:
+    """Structure the provider declared inside a message's content blocks.
+
+    `_part_text` flattens a tool_use block down to `[tool_use: name({json})]`
+    for the text view, and until #103 that string was the only trace the report
+    kept. The frontend's JSON renderer needs a whole body to parse, so it never
+    fired on it — measured across the demo report it fired on 3 of 64 segments
+    and 0 of 15 outputs, all of them `tool_defs`, making a general feature a
+    tool-definition viewer. The fix is not a better heuristic: it is to stop
+    throwing away structure we were handed.
+
+    Only blocks whose payload the provider *declared* as an object or array are
+    returned. Nothing here parses JSON out of free text — a tool_result whose
+    content is a string stays a string, because "this string looks like JSON"
+    is an inference, and inferred structure must not be dressed up as declared.
+    """
+    if not isinstance(content, list):
+        return []
+    parts = []
+    for part in content:
+        if not isinstance(part, dict) or part.get("type") != "tool_use":
+            continue
+        value = part.get("input")
+        if isinstance(value, (dict, list)):
+            parts.append(
+                {"kind": "tool_call", "name": str(part.get("name") or "tool"), "value": value}
+            )
+    return parts
+
+
+def _with_structure(item: dict, content) -> dict:
+    """Attach declared structure to a segment/output, if the blocks carry any."""
+    parts = _structured_parts(content)
+    if parts:
+        item["structured"] = parts
+    return item
+
+
 def _block_types(content) -> set:
     """The set of content-block `type`s in a message (empty for string content)."""
     if isinstance(content, list):
@@ -189,7 +227,7 @@ def _chat_segments(request: dict) -> list[dict]:
         types = _block_types(content)
         if role == "user" and "tool_result" in types and "text" not in types:
             segment["kind"] = "tool"
-        segments.append(segment)
+        segments.append(_with_structure(segment, content))
     return segments
 
 
@@ -238,19 +276,25 @@ def _chat_output(response) -> dict | None:
         return {"content": text, "finish_reason": response.get("stop_reason")}
     if response.get("type") == "message" and isinstance(response.get("content"), list):
         # anthropic non-stream Messages: top-level content-block list + stop_reason
-        return {
-            "content": _content_to_text(response["content"]),
-            "finish_reason": response.get("stop_reason"),
-        }
+        return _with_structure(
+            {
+                "content": _content_to_text(response["content"]),
+                "finish_reason": response.get("stop_reason"),
+            },
+            response["content"],
+        )
     choices = response.get("choices") or []
     if not choices:
         return None
     first = choices[0]
     message = first.get("message") or {}
-    return {
-        "content": _content_to_text(message.get("content")),
-        "finish_reason": first.get("finish_reason"),
-    }
+    return _with_structure(
+        {
+            "content": _content_to_text(message.get("content")),
+            "finish_reason": first.get("finish_reason"),
+        },
+        message.get("content"),
+    )
 
 
 def _responses_output(response) -> dict | None:

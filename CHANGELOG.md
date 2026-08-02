@@ -44,6 +44,25 @@ land in minor versions).
   indistinguishable from "rewritten", so it warns rather than failing or
   passing. Output-level metamorphic, with the statistical gating a live run
   would need, is deferred to its own design discussion (#14, #105).
+- Segments and outputs now carry `structured` — the structure the provider
+  itself declared inside a message's content blocks, currently a tool call's
+  own arguments — and the Calls view renders it as a tree beside the text it
+  was flattened into. The structure-aware renderer added in #92 needed a whole
+  body to `JSON.parse`, so on real data it fired on 3 of 64 segments and 0 of
+  15 outputs, every one of them `tool_defs`: a general feature that was in
+  practice a tool-definition viewer. The cause was not a weak heuristic but
+  that `normalize.py` had the parsed block in hand and flattened it to
+  `[tool_use: name({json})]`, which nothing could parse back. Only declared
+  structure is carried: a tool result whose content merely *looks* like JSON
+  was declared a string and stays one, because inferred structure must not be
+  presented as a fact. Redaction walks the new field — nested values **and
+  object keys**, which reach the rendered tree exactly as values do and which
+  were previously covered for free by only ever arriving through an
+  already-masked `content` string. Because masking is many-to-one, colliding
+  keys are numbered rather than merged, so no value is dropped and the key
+  count the UI prints stays true; and because `structured` is a second
+  representation of text `content` already carries, it is masked without
+  counting, so one secret is not disclosed as two (#103).
 - The Calls view renders a JSON segment or output body as a collapsed,
   expandable tree — top-level keys visible at a glance, nested branches
   opened on click — instead of an undifferentiated wall of quotes and
@@ -65,6 +84,45 @@ land in minor versions).
   already gives the single-run rules (#109).
 
 ### Fixed
+- The Calls view now has a reading order. The fn card rendered `api`,
+  `duration`, `mode`, `span` and `usage` as five identical label-value rows,
+  so nothing led the eye — and three of them are near-constant: across the
+  demo report `api` has two distinct values, `mode` reads "sync" on 15 of 16
+  calls, and `duration` is empty on every imported one, while `usage`
+  restated the window bar directly above it. Cost is now the card's one large
+  number, the fixed facts collapse to a single quiet line (the shape Chain's
+  `.fnpill` already used), and a segment header leads with its token count
+  with the shares set beneath it as context rather than as peers (#103).
+- Graph's flow edges no longer swing out into blank canvas once the source and
+  context-element columns collapse. The reserved gutter they route through was
+  fixed to the right of the call column — correct in the three-column layout,
+  where incoming provenance edges already occupy every call box's left edge,
+  but wrong the moment those columns are gone and there are no provenance
+  edges at all: the flows bulged rightward into an otherwise empty canvas,
+  appearing to point at something off-screen. The gutter now goes to whichever
+  side is free (left when collapsed, right otherwise), and "feeds the very
+  next call" is drawn as a straight drop between the two stacked boxes instead
+  of a gutter detour, so only real hops take a lane. Collapsed reports are now
+  sized to their content rather than to the vestigial lane, and the gutter is
+  labelled `FLOWS` when anything routes through it (#102).
+- Chain now draws the whole inferred lineage in its default state. Previously
+  only "call N feeds call N+1" arrows were drawn and every other flow waited
+  behind a click on an output chip — in the demo report that hid 8 of 15
+  edges (53%), and 4 of 6 in the flagship RAG session. The hidden majority
+  was the informative one: that call 2's output was still in the window at
+  call 6 is the observation the product exists to surface, while "N feeds
+  N+1" is the expected case. Later flows now route down a reserved left
+  gutter, one lane each (greedy interval colouring, so two flows share a lane
+  only when their row ranges cannot touch — a single shared lane is what made
+  drawing them all impossible before), at a lighter weight than the adjacent
+  chain. Clicking an output still isolates that call's flows, but is no
+  longer the only way to see them. Both weights are inferred the same way and
+  the view says so. The gutter grows with the lane count rather than folding
+  lanes back onto one another past a fixed few — one source call may feed 32
+  later calls, and reusing an occupied lane would restore the very overprint
+  the allocator exists to prevent. Past the gutter's capacity the outermost
+  lane is shared and the view discloses it, rather than implying a separation
+  it is not providing (#104).
 - Imported agent-loop sessions no longer show every call in one episode with
   the identical label (the human turn's own sentence) across Overview, Chain,
   the Calls sidebar and the fn card — in a real trial, 38 consecutive calls
