@@ -16,9 +16,24 @@ import click
 
 try:
     from mcp.server.fastmcp import FastMCP
-except ImportError as exc:  # pragma: no cover - exercised only without the extra
+except ImportError as exc:  # pragma: no cover - exercised only without a usable mcp
+    # Two different failures reach here and they need different instructions.
+    # `mcp` absent is the ordinary "you skipped the extra" case. `mcp` present
+    # but too new is not: 2.0 renamed FastMCP to mcp.server.mcpserver.MCPServer,
+    # so telling that user to install the extra sends them to run a command that
+    # cannot fix anything (#114 tracks the port).
+    try:
+        import importlib.metadata as _md
+
+        _installed = _md.version("mcp")
+    except Exception:  # noqa: BLE001 - mcp genuinely absent, or metadata unreadable
+        _installed = None
     raise ImportError(
         "The ctxlineage MCP server needs the 'mcp' extra: pip install 'ctxlineage[mcp]'"
+        if _installed is None
+        else f"mcp {_installed} is installed but does not provide mcp.server.fastmcp. "
+        "ctxlineage's MCP server does not support mcp 2.x yet - "
+        "pin it with: pip install 'mcp<2'"
     ) from exc
 
 from ctxlineage._report import html, normalize

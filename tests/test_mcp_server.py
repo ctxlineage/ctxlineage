@@ -341,3 +341,57 @@ def test_missing_events_file(tmp_path):
     server.configure(tmp_path / "empty")
     with pytest.raises(FileNotFoundError, match=r"ctxlineage\.init\(\)"):
         server.list_sessions()
+
+
+def _reimport_without_fastmcp(monkeypatch, installed):
+    """Import ctxlineage_mcp.server as it would be with no usable FastMCP.
+
+    `installed` is the mcp version importlib.metadata should report, or None to
+    stand in for mcp being absent entirely.
+    """
+    import builtins
+    import importlib
+    import importlib.metadata
+    import sys
+
+    real_import = builtins.__import__
+
+    def fake_import(name, *args, **kwargs):
+        if name == "mcp.server.fastmcp":
+            raise ImportError("No module named 'mcp.server.fastmcp'")
+        return real_import(name, *args, **kwargs)
+
+    def fake_version(name):
+        if name == "mcp" and installed is None:
+            raise importlib.metadata.PackageNotFoundError(name)
+        return installed if name == "mcp" else importlib.metadata.version(name)
+
+    monkeypatch.setattr(builtins, "__import__", fake_import)
+    monkeypatch.setattr(importlib.metadata, "version", fake_version)
+    monkeypatch.delitem(sys.modules, "ctxlineage_mcp.server", raising=False)
+    try:
+        importlib.import_module("ctxlineage_mcp.server")
+    finally:
+        # Leave the real module in sys.modules for every later test.
+        monkeypatch.undo()
+        importlib.import_module("ctxlineage_mcp.server")
+
+
+def test_absent_mcp_points_at_the_extra(monkeypatch):
+    with pytest.raises(ImportError, match=r"pip install 'ctxlineage\[mcp\]'"):
+        _reimport_without_fastmcp(monkeypatch, installed=None)
+
+
+def test_incompatible_mcp_says_so_instead_of_repeating_the_extra(monkeypatch):
+    """An mcp that is installed but too new must not be told to install mcp.
+
+    mcp 2.0 renamed FastMCP, so the generic "install the extra" line sends that
+    user to run a command that changes nothing. The version they actually have
+    has to appear, and the instruction has to be the pin.
+    """
+    with pytest.raises(ImportError) as excinfo:
+        _reimport_without_fastmcp(monkeypatch, installed="2.0.0")
+    message = str(excinfo.value)
+    assert "2.0.0" in message
+    assert "mcp<2" in message
+    assert "ctxlineage[mcp]" not in message

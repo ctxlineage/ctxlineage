@@ -32,7 +32,11 @@ Issues = "https://github.com/ctxlineage/ctxlineage/issues"
 Changelog = "https://github.com/ctxlineage/ctxlineage/blob/main/CHANGELOG.md"
 
 [project.optional-dependencies]
-mcp = ["mcp>=1.2"]
+# Upper bound, not a preference: mcp 2.0 removed `mcp.server.fastmcp`, which
+# `ctxlineage_mcp.server` imports, so an unbounded range hands a fresh
+# `pip install 'ctxlineage[mcp]'` a server that cannot start. Lifted once the
+# server is ported to 2.x's `mcp.server.mcpserver.MCPServer` (#114).
+mcp = ["mcp>=1.2,<2"]
 
 # Registers the plugin in any suite that has ctxlineage installed; it stays
 # inert until --ctxlineage (or the `ctxlineage` ini option) asks for it.
@@ -55,7 +59,7 @@ dev = [
   "ruff>=0.8",
   "anthropic>=0.43",
   "langfuse>=4,<5",
-  "mcp>=1.2",
+  "mcp>=1.2,<2",  # see the extra above
   "pytest-playwright>=0.5",
 ]
 

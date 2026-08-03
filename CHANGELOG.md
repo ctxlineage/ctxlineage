@@ -65,6 +65,15 @@ land in minor versions).
   already gives the single-run rules (#109).
 
 ### Fixed
+- The `mcp` extra is capped at `mcp>=1.2,<2`. `mcp` 2.0 removed
+  `mcp.server.fastmcp`, which `ctxlineage_mcp.server` imports, so the
+  previously unbounded range meant a fresh `pip install 'ctxlineage[mcp]'`
+  installed a server that raised on import. The weekly upgrade job caught it.
+  The cap comes off once the server is ported to 2.x's `MCPServer` (#114).
+- The MCP server's import guard no longer answers every failure with "install
+  the `mcp` extra". When `mcp` is installed but too new to provide `FastMCP`,
+  that instruction fixes nothing; the error now names the version actually
+  found and asks for the pin instead (#114).
 - Imported agent-loop sessions no longer show every call in one episode with
   the identical label (the human turn's own sentence) across Overview, Chain,
   the Calls sidebar and the fn card — in a real trial, 38 consecutive calls
