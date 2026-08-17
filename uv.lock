@@ -545,7 +545,7 @@ dev = [
     { name = "jsonschema", specifier = ">=4.21" },
     { name = "langfuse", specifier = ">=4,<5" },
     { name = "mcp", specifier = ">=1.2,<2" },
-    { name = "openai", specifier = ">=1.40" },
+    { name = "openai", specifier = ">=1.40,<3" },
     { name = "pytest", specifier = ">=8" },
     { name = "pytest-asyncio", specifier = ">=0.24" },
     { name = "pytest-cov", specifier = ">=5" },
