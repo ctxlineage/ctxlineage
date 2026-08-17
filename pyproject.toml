@@ -54,7 +54,13 @@ dev = [
   "pytest-asyncio>=0.24",
   "pytest-cov>=5",
   "respx>=0.22",
-  "openai>=1.40",
+  # Upper bound, not a preference: openai 3.0 swapped its transport from httpx
+  # to a new `httpx2` package, so respx (which patches httpx.Client) no longer
+  # intercepts its requests - every respx-mocked test hits the real API and
+  # gets a real 401. openai/anthropic are dev-only (never installed for an
+  # end user of ctxlineage itself), so this only protects the test suite, not
+  # a shipped package - lifted once the mocking layer is ported (#117).
+  "openai>=1.40,<3",
   "jsonschema>=4.21",
   "ruff>=0.8",
   "anthropic>=0.43",
