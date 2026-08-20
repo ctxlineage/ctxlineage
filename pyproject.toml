@@ -60,7 +60,7 @@ dev = [
   # gets a real 401. openai/anthropic are dev-only (never installed for an
   # end user of ctxlineage itself), so this only protects the test suite, not
   # a shipped package - lifted once the mocking layer is ported (#117).
-  "openai>=1.40,<3",
+  "openai>=1.40,<4",
   "jsonschema>=4.21",
   "ruff>=0.8",
   "anthropic>=0.43",
