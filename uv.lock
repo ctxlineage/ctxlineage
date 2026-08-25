@@ -541,7 +541,7 @@ provides-extras = ["mcp"]
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "anthropic", specifier = ">=0.43" },
+    { name = "anthropic", specifier = ">=0.43,<1" },
     { name = "jsonschema", specifier = ">=4.21" },
     { name = "langfuse", specifier = ">=4,<5" },
     { name = "mcp", specifier = ">=1.2,<2" },

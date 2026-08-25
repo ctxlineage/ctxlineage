@@ -63,7 +63,9 @@ dev = [
   "openai>=1.40,<3",
   "jsonschema>=4.21",
   "ruff>=0.8",
-  "anthropic>=0.43",
+  # Same reasoning and the same fix as the openai cap above: anthropic 1.0
+  # made the identical httpx -> httpx2 transport swap (#117).
+  "anthropic>=0.43,<1",
   "langfuse>=4,<5",
   "mcp>=1.2,<2",  # see the extra above
   "pytest-playwright>=0.5",
